@@ -13,6 +13,11 @@ option(PLATFORM_ANDROID "build for Android" OFF)
 option(PLATFORM_PSV "build for psv" OFF)
 option(PLATFORM_PS4 "build for ps4" OFF)
 option(PLATFORM_SWITCH "build for switch" OFF)
+option(PLATFORM_XBOX360 "build for Xbox 360/XDK" OFF)
+
+# M1 bring-up switch. This only selects the vendored NanoVG D3D9 sources;
+# the Xbox 360 platform/window layer is intentionally still separate.
+cmake_dependent_option(XBOX360_NANOVG_D3D9 "Use vendored NanoVG D3D9 backend" OFF "PLATFORM_XBOX360" OFF)
 
 # OpenGL options
 option(USE_EGL "Using EGL instead of native GL." OFF)

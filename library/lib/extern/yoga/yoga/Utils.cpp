@@ -20,14 +20,22 @@ YGFlexDirection YGFlexDirectionCross(
 
 float YGFloatMax(const float a, const float b) {
   if (!yoga::isUndefined(a) && !yoga::isUndefined(b)) {
+#if defined(PLATFORM_XBOX360)
+    return a > b ? a : b;
+#else
     return fmaxf(a, b);
+#endif
   }
   return yoga::isUndefined(a) ? b : a;
 }
 
 float YGFloatMin(const float a, const float b) {
   if (!yoga::isUndefined(a) && !yoga::isUndefined(b)) {
+#if defined(PLATFORM_XBOX360)
+    return a < b ? a : b;
+#else
     return fminf(a, b);
+#endif
   }
 
   return yoga::isUndefined(a) ? b : a;

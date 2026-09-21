@@ -95,6 +95,7 @@ static void loadLocale(std::string locale, nlohmann::json* target)
         std::ifstream jsonStream;
         jsonStream.open(path);
 
+ #if defined(__cpp_exceptions)
         try
         {
             jsonStream >> strings;
@@ -103,6 +104,9 @@ static void loadLocale(std::string locale, nlohmann::json* target)
         {
             Logger::error("Error while loading \"{}\": {}", path, e.what());
         }
+ #else
+        jsonStream >> strings;
+ #endif
 
         jsonStream.close();
 
@@ -126,6 +130,7 @@ namespace internal
     {
         nlohmann::json::json_pointer pointer;
 
+ #if defined(__cpp_exceptions)
         try
         {
             pointer = nlohmann::json::json_pointer("/" + std::string(BRLS_I18N_PREFIX) + stringName);
@@ -135,24 +140,23 @@ namespace internal
             Logger::error("Error while getting string \"{}\": {}", stringName, e.what());
             return stringName;
         }
+ #else
+        pointer = nlohmann::json::json_pointer("/" + std::string(BRLS_I18N_PREFIX) + stringName);
+ #endif
 
         // First look for translated string in current locale
-        try
-        {
-            return currentLocale[pointer].get<std::string>();
-        }
-        catch (...)
-        {
-        }
+ #if defined(__cpp_exceptions)
+        try { return currentLocale[pointer].get<std::string>(); } catch (...) {}
+ #else
+        if (!currentLocale.empty() && currentLocale.contains(pointer)) return currentLocale[pointer].get<std::string>();
+ #endif
 
         // Then look for default locale
-        try
-        {
-            return defaultLocale[pointer].get<std::string>();
-        }
-        catch (...)
-        {
-        }
+ #if defined(__cpp_exceptions)
+        try { return defaultLocale[pointer].get<std::string>(); } catch (...) {}
+ #else
+        if (!defaultLocale.empty() && defaultLocale.contains(pointer)) return defaultLocale[pointer].get<std::string>();
+ #endif
 
         // Fallback to returning the string name
         return stringName;

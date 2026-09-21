@@ -16,9 +16,8 @@
 
 #pragma once
 
-#include <stdexcept>
-
 #include "borealis/core/singleton.hpp"
+#include "borealis/core/util.hpp"
 
 namespace brls
 {
@@ -61,7 +60,7 @@ class LRUCache
         , defaultValue(defaultValue)
     {
         if (c < 1)
-            throw std::logic_error("Cache capacity cannot less than 1.");
+            fatal("Cache capacity cannot less than 1.");
     }
 
     T get(K key)
@@ -84,7 +83,7 @@ class LRUCache
     {
         if (isCacheHit(key))
         {
-            throw std::logic_error("Can not cache the same key twice.");
+            fatal("Can not cache the same key twice.");
         }
 
         // Check capacity limits
@@ -129,7 +128,7 @@ class LRUCache
     void setCapacity(int c)
     {
         if (c < 1)
-            throw std::logic_error("Cache capacity cannot less than 1.");
+            fatal("Cache capacity cannot less than 1.");
         // The setting standard of the DEFAULT_CAPACITY should be the upper limit of the number of all pictures.
         c += DEFAULT_CAPACITY;
         this->capacity = c;

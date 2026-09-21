@@ -77,7 +77,11 @@ public:
     constexpr auto upperBound =
         Unit == YGUnitPercent ? UPPER_BOUND_PERCENT : UPPER_BOUND_POINT;
     if (value > upperBound || value < -upperBound) {
+#if defined(PLATFORM_XBOX360)
+      value = value < 0.0f ? -upperBound : upperBound;
+#else
       value = copysignf(upperBound, value);
+#endif
     }
 
     uint32_t unitBit = Unit == YGUnitPercent ? PERCENT_BIT : 0;

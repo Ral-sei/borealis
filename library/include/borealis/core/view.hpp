@@ -178,7 +178,7 @@ struct AppletFrameItem {
 #ifdef USE_LIBROMFS
         iconPath = "@res/" + name;
 #else
-        iconPath = std::string(BRLS_RESOURCES) + name;
+        iconPath = BRLS_ASSET(name);
 #endif
     }
 

@@ -16,12 +16,16 @@
 
 #pragma once
 
+#if !defined(PLATFORM_XBOX360)
 #include <unistd.h>
+#endif
 
 #include <chrono>
 #include <functional>
-#include <mutex>
+#include <borealis/core/xbox360_mutex.hpp>
+#if !defined(PLATFORM_XBOX360)
 #include <thread>
+#endif
 #include <vector>
 #include <set>
 
@@ -97,24 +101,24 @@ class Threading
 
     static std::vector<std::function<void()>>* getSyncFunctions()
     {
-        std::lock_guard<std::mutex> guard(m_sync_mutex);
+        PlatformLockGuard guard(m_sync_mutex);
         return &m_sync_functions;
     }
 
     static std::vector<std::function<void()>>* getAsyncTasks()
     {
-        std::lock_guard<std::mutex> guard(m_async_mutex);
+        PlatformLockGuard guard(m_async_mutex);
         return &m_async_tasks;
     }
 
   private:
-    inline static std::mutex m_sync_mutex;
+    inline static PlatformMutex m_sync_mutex;
     inline static std::vector<std::function<void()>> m_sync_functions;
 
-    inline static std::mutex m_async_mutex;
+    inline static PlatformMutex m_async_mutex;
     inline static std::vector<std::function<void()>> m_async_tasks;
 
-    inline static std::mutex m_delay_mutex;
+    inline static PlatformMutex m_delay_mutex;
     inline static std::vector<DelayOperation> m_delay_tasks;
     inline static std::set<size_t> m_delay_cancel_set;
     inline static size_t m_delay_index = 0;

@@ -89,12 +89,151 @@ elseif (PLATFORM_SWITCH)
     if (NOT USE_GLFW AND NOT SDL2)
         set(USE_GLFW ON)
     endif ()
+elseif (PLATFORM_XBOX360)
+    message(STATUS "building for Xbox 360/XDK")
+    set(USE_SDL2 OFF)
+    set(USE_GLFW OFF)
+    add_definitions(-DPLATFORM_XBOX360 -D__XBOX360__ -D_XBOX360)
+
+    # Select the freestanding Xenon compiler before project() so CMake does
+    # not silently fall back to the host GCC.
+    if (NOT DEFINED ENV{OXDK_LLVM})
+        message(FATAL_ERROR "PLATFORM_XBOX360 requires OXDK_LLVM")
+    endif ()
+    set(XBOX360_LLVM "$ENV{OXDK_LLVM}")
+    set(CMAKE_C_COMPILER "${XBOX360_LLVM}/bin/clang" CACHE FILEPATH "Xbox 360 C compiler" FORCE)
+    set(CMAKE_CXX_COMPILER "${XBOX360_LLVM}/bin/clang++" CACHE FILEPATH "Xbox 360 C++ compiler" FORCE)
+    set(CMAKE_C_COMPILER_TARGET "powerpc-unknown-none-elf" CACHE STRING "Xbox 360 compiler target" FORCE)
+    set(CMAKE_CXX_COMPILER_TARGET "powerpc-unknown-none-elf" CACHE STRING "Xbox 360 C++ compiler target" FORCE)
+    # Xenon has no hosted CRT startup objects. CMake's default compiler probe
+    # links an executable and otherwise falls back to the host linker.
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY CACHE STRING "" FORCE)
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fuse-ld=lld" CACHE STRING "Xbox 360 executable linker flags" FORCE)
+    # Xenon has no hosted CRT. Drive executable links through OXDK's two-pass
+    # ld.lld + cxex linker instead of allowing clang/CMake to add host startup
+    # objects and libc. Objects are before the literal separator; archives are
+    # passed after it so oxdklink can distinguish them from its own options.
+    if (NOT DEFINED ENV{OXDK_DIR})
+        message(FATAL_ERROR "PLATFORM_XBOX360 requires OXDK_DIR")
+    endif ()
+    set(XBOX360_OXDKLINK "$ENV{OXDK_DIR}/xbox360/tools/oxdklink/oxdklink.py")
+    if (NOT EXISTS "${XBOX360_OXDKLINK}")
+        message(FATAL_ERROR "OXDK linker not found: ${XBOX360_OXDKLINK}")
+    endif ()
+    set(XBOX360_STRIP_DEPLIBS "${CMAKE_SOURCE_DIR}/cmake/strip_deplibs.cmake")
+    # The link rule goes through scripts/oxdklink_xbox360.py, which copies each input
+    # into a staging directory, clears .deplibs there and links the copies. Stripping
+    # in place would leave every object newer than its sources, and ninja would then
+    # recompile the whole project on every build.
+    set(XBOX360_OXDKLINK_WRAPPER "${CMAKE_SOURCE_DIR}/scripts/oxdklink_xbox360.py")
+    if (NOT EXISTS "${XBOX360_OXDKLINK_WRAPPER}")
+        message(FATAL_ERROR "Xbox link wrapper not found: ${XBOX360_OXDKLINK_WRAPPER}")
+    endif ()
+    if (NOT EXISTS "${XBOX360_STRIP_DEPLIBS}")
+        message(FATAL_ERROR "Xbox .deplibs cleanup script not found: ${XBOX360_STRIP_DEPLIBS}")
+    endif ()
+    set(XBOX360_XDK_LIBS "xapilib,libcMT" CACHE STRING "XDK libraries passed to oxdklink")
+    set(CMAKE_CXX_LINK_EXECUTABLE
+        "python3 ${XBOX360_OXDKLINK_WRAPPER} --objcopy ${XBOX360_LLVM}/bin/llvm-objcopy --oxdklink ${XBOX360_OXDKLINK} --stage ${CMAKE_BINARY_DIR}/.oxdklink/inputs -o <TARGET> -T $ENV{OXDK_DIR}/xbox360/oxdk360/title.ld --xdk $ENV{XDK_DIR} --libs ${XBOX360_XDK_LIBS} <OBJECTS> -- <LINK_LIBRARIES>"
+        CACHE STRING "Xbox 360 CXX link rule" FORCE)
+    set(CMAKE_C_LINK_EXECUTABLE "${CMAKE_CXX_LINK_EXECUTABLE}" CACHE STRING "Xbox 360 C link rule" FORCE)
+    set(CMAKE_EXECUTABLE_SUFFIX ".xex")
+    add_compile_options(
+        -m32
+        -ffreestanding -fno-builtin
+        -fms-extensions -fms-compatibility -fshort-wchar -fno-autolink
+        -D_WIN32 -D_M_PPCBE -D_M_PPC -D_PPC_ -D_XBOX -D_XENON -DXBOX
+        # The XDK CRT redeclares size_t and only exposes the Microsoft
+        # snprintf spellings. Keep these definitions consistent with the
+        # Xbox mbedTLS target and the rest of the Xenon build.
+        -D_SIZE_T_DEFINED
+        -Dsnprintf=_snprintf
+        -Dvsnprintf=_vsnprintf
+    )
+    # Match OXDK's OXDK360_LIBCXX=1 mode. The XDK contains an old MSVC/TR1
+    # library which is not link-compatible with clang's Itanium ABI. C++
+    # sources must see the matching libc++ headers before the XDK include tree.
+    option(XBOX360_USE_OXDK_LIBCXX "Use OXDK libc++ headers/runtime" ON)
+    if (XBOX360_USE_OXDK_LIBCXX)
+        if (NOT DEFINED ENV{OXDK_DIR})
+            message(FATAL_ERROR "XBOX360_USE_OXDK_LIBCXX requires OXDK_DIR")
+        endif ()
+        set(XBOX360_OXDK_ROOT "$ENV{OXDK_DIR}")
+        if (DEFINED ENV{OXDK_LIBCXX_DIR})
+            set(XBOX360_LIBCXX_DIR "$ENV{OXDK_LIBCXX_DIR}")
+        else ()
+            set(XBOX360_LIBCXX_DIR "${XBOX360_LLVM}/../libcxx/include")
+        endif ()
+        if (NOT EXISTS "${XBOX360_LIBCXX_DIR}/vector")
+            message(FATAL_ERROR "OXDK libc++ headers not found: ${XBOX360_LIBCXX_DIR}")
+        endif ()
+        set(XBOX360_LIBCXX_CONFIG "${XBOX360_OXDK_ROOT}/xbox360/oxdk360/libcxx-config")
+        set(XBOX360_LIBCXX_COMMON "${XBOX360_OXDK_ROOT}/common/libcxx")
+        set(XBOX360_LIBCXX_CSHIM "${XBOX360_OXDK_ROOT}/xbox360/oxdk360/libcxx-cshim")
+        set(XBOX360_BOREALIS_CSHIM "${CMAKE_CURRENT_LIST_DIR}/xbox360-cshim")
+        if (NOT EXISTS "${XBOX360_LIBCXX_CONFIG}/__config_site")
+            message(FATAL_ERROR "OXDK libc++ config not found: ${XBOX360_LIBCXX_CONFIG}")
+        endif ()
+        # CMake's CXX compiler already supplies its resource headers. Put them
+        # after libc++ cshim, as in OXDK's xbox360.mk.
+        execute_process(
+            COMMAND "${XBOX360_LLVM}/bin/clang++" -print-resource-dir
+            OUTPUT_VARIABLE XBOX360_CLANG_RESOURCE
+            OUTPUT_STRIP_TRAILING_WHITESPACE)
+        # OXDK also puts its C shims and XDK CRT headers on the C compiler
+        # path. Without this, freestanding C sources fall through to the
+        # host's /usr/include headers (for example NanoVG's <stdlib.h>).
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -isystem${XBOX360_BOREALIS_CSHIM} -isystem${XBOX360_LIBCXX_CSHIM} -isystem$ENV{OXDK_DIR}/xbox360/oxdk360/header-shim -isystem$ENV{XDK_DIR}/include/xbox -isystem$ENV{XDK_DIR}/TechPreview/Jul12Compiler/include/xbox -D_MSC_VER=1900 -D_MSC_FULL_VER=190023026 -D_W64= -fms-compatibility-version=19 -fdelayed-template-parsing -Xclang -target-feature -Xclang +xenon-abi")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -nostdinc++ -isystem${XBOX360_LIBCXX_CONFIG} -isystem${XBOX360_LIBCXX_COMMON} -isystem${XBOX360_BOREALIS_CSHIM} -isystem${XBOX360_LIBCXX_DIR} -isystem${XBOX360_LIBCXX_CSHIM} -isystem${XBOX360_CLANG_RESOURCE}/include -DNOMINMAX -D_MSC_VER=1900 -D_MSC_FULL_VER=190023026 -D_W64= -D_PTRDIFF_T_DEFINED -D_INTPTR_T_DEFINED -D_UINTPTR_T_DEFINED -include stdint.h -D_XM_NO_INTRINSICS_ -fno-exceptions -fms-compatibility-version=19 -fdelayed-template-parsing -Xclang -target-feature -Xclang +xenon-abi")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -isystem$ENV{OXDK_DIR}/xbox360/oxdk360/header-shim -isystem$ENV{OXDK_DIR}/xbox360/oxdk360/include -isystem$ENV{XDK_DIR}/include/xbox -isystem$ENV{XDK_DIR}/TechPreview/Jul12Compiler/include/xbox")
+        message(STATUS "Xbox 360 libc++ headers: ${XBOX360_LIBCXX_DIR}")
+
+        # Compiler runtime translation units, equivalent to OXDK360_LIBCXX=1
+        # mode in xbox360.mk: builtins.c supplies the 64-bit helpers clang
+        # calls into, libcxx_runtime.cpp the pieces libc++ keeps out of its
+        # headers. They are compiled without the project's own flags so a
+        # force-included header or -D in APP_PLATFORM_OPTION cannot break
+        # the toolchain's own code, exactly like the mk file's helper rules.
+        set(XBOX360_BUILTINS_C "$ENV{OXDK_DIR}/xbox360/oxdk360/builtins/builtins.c")
+        set(XBOX360_LIBCXX_RUNTIME_CPP "$ENV{OXDK_DIR}/xbox360/oxdk360/libcxx-shim/libcxx_runtime.cpp")
+        foreach (_xbox360_rt_src IN ITEMS "${XBOX360_BUILTINS_C}" "${XBOX360_LIBCXX_RUNTIME_CPP}")
+            if (NOT EXISTS "${_xbox360_rt_src}")
+                message(FATAL_ERROR "OXDK runtime source not found: ${_xbox360_rt_src}")
+            endif ()
+        endforeach ()
+        add_library(xbox360_runtime STATIC
+            "${XBOX360_BUILTINS_C}"
+            "${XBOX360_LIBCXX_RUNTIME_CPP}")
+        target_compile_options(xbox360_runtime PRIVATE -O2)
+        # No project flags/includes: only the Xenon/XDK/libc++ path set up
+        # above is visible to these sources.
+        set_target_properties(xbox360_runtime PROPERTIES
+            CXX_STANDARD 20
+            POSITION_INDEPENDENT_CODE OFF)
+        message(STATUS "Xbox 360 runtime: ${XBOX360_BUILTINS_C}; ${XBOX360_LIBCXX_RUNTIME_CPP}")
+    else ()
+        if (DEFINED ENV{OXDK_DIR})
+            include_directories(
+                "$ENV{OXDK_DIR}/xbox360/oxdk360/header-shim"
+                "$ENV{OXDK_DIR}/xbox360/oxdk360/include"
+            )
+        endif ()
+        if (DEFINED ENV{XDK_DIR})
+            include_directories(
+                "$ENV{XDK_DIR}/include/xbox"
+                "$ENV{XDK_DIR}/TechPreview/Jul12Compiler/include/xbox"
+            )
+        endif ()
+    endif ()
 else()
     message(FATAL_ERROR "Please set build target. Example: -DPLATFORM_DESKTOP=ON or -DPLATFORM_SWITCH=ON")
 endif ()
 
 # graphics drivers
-if (USE_DEKO3D)
+if (PLATFORM_XBOX360)
+    message(STATUS "Xbox 360 D3D9 driver")
+    set(BOREALIS_USE_D3D9 ON)
+elseif (USE_DEKO3D)
     message(STATUS "USE_DEKO3D")
     set(BOREALIS_USE_DEKO3D ON)
 elseif (USE_D3D11)
@@ -137,7 +276,7 @@ endif ()
 if (USE_EGL)
     message(STATUS "Using EGL")
     add_definitions(-DUSE_EGL)
-elseif (NOT USE_D3D11)
+elseif (NOT USE_D3D11 AND NOT PLATFORM_XBOX360)
     message(STATUS "Using native GL")
 endif ()
 

@@ -15,6 +15,7 @@
 */
 
 #include <borealis/core/util.hpp>
+#include <cstdlib>
 #include <fstream>
 
 #ifdef __PSV__
@@ -39,6 +40,8 @@ bool startsWith(const std::string& data, const std::string& prefix)
     brls::Logger::error("Fatal error: {}", message);
 #ifdef __PSV__
     sceKernelExitProcess(1);
+#elif defined(PLATFORM_XBOX360) || defined(__XBOX360__)
+    std::abort();
 #else
     throw std::logic_error(message);
 #endif

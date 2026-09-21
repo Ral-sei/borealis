@@ -1,0 +1,171 @@
+#ifndef BOREALIS_XBOX360_THREAD
+#define BOREALIS_XBOX360_THREAD
+
+#include <__config>
+#include <chrono>
+#include <cstdlib>
+#include <functional>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+#include <xtl.h>
+
+_LIBCPP_BEGIN_NAMESPACE_STD
+
+class thread {
+public:
+    class id {
+    public:
+        constexpr id() noexcept = default;
+        explicit constexpr id(DWORD value) noexcept : value_(value) {}
+
+        constexpr DWORD value() const noexcept { return value_; }
+
+        friend constexpr bool operator==(id lhs, id rhs) noexcept {
+            return lhs.value_ == rhs.value_;
+        }
+        friend constexpr bool operator!=(id lhs, id rhs) noexcept {
+            return !(lhs == rhs);
+        }
+        friend constexpr bool operator<(id lhs, id rhs) noexcept {
+            return lhs.value_ < rhs.value_;
+        }
+        friend constexpr bool operator<=(id lhs, id rhs) noexcept {
+            return !(rhs < lhs);
+        }
+        friend constexpr bool operator>(id lhs, id rhs) noexcept {
+            return rhs < lhs;
+        }
+        friend constexpr bool operator>=(id lhs, id rhs) noexcept {
+            return !(lhs < rhs);
+        }
+
+    private:
+        DWORD value_ = 0;
+    };
+
+    using native_handle_type = HANDLE;
+
+    thread() noexcept = default;
+
+    template <class F, class... Args>
+    explicit thread(F&& function, Args&&... args) {
+        using task_type = task_model<typename decay<F>::type,
+                                     typename decay<Args>::type...>;
+        task_base* task = new task_type(forward<F>(function),
+                                        forward<Args>(args)...);
+        handle_ = CreateThread(nullptr, 0, &thread_entry, task, 0, &id_);
+        if (handle_ == nullptr) {
+            delete task;
+            id_ = 0;
+        }
+    }
+
+    ~thread() {
+        if (joinable()) abort();
+    }
+
+    thread(const thread&) = delete;
+    thread& operator=(const thread&) = delete;
+
+    thread(thread&& other) noexcept { swap(other); }
+
+    thread& operator=(thread&& other) noexcept {
+        if (joinable()) abort();
+        swap(other);
+        return *this;
+    }
+
+    void swap(thread& other) noexcept {
+        std::swap(handle_, other.handle_);
+        std::swap(id_, other.id_);
+    }
+
+    bool joinable() const noexcept { return handle_ != nullptr; }
+
+    void join() {
+        if (!joinable()) return;
+        WaitForSingleObject(handle_, INFINITE);
+        CloseHandle(handle_);
+        handle_ = nullptr;
+        id_ = 0;
+    }
+
+    void detach() {
+        if (!joinable()) return;
+        CloseHandle(handle_);
+        handle_ = nullptr;
+        id_ = 0;
+    }
+
+    id get_id() const noexcept { return id(id_); }
+    native_handle_type native_handle() noexcept { return handle_; }
+
+    static unsigned hardware_concurrency() noexcept { return 6; }
+
+private:
+    struct task_base {
+        virtual ~task_base() = default;
+        virtual void run() = 0;
+    };
+
+    template <class F, class... Args>
+    struct task_model final : task_base {
+        template <class Fn, class... Values>
+        explicit task_model(Fn&& function, Values&&... values)
+            : state(forward<Fn>(function), forward<Values>(values)...) {}
+
+        void run() override {
+            apply([](auto&& function, auto&&... values) {
+                invoke(move(function), move(values)...);
+            }, move(state));
+        }
+
+        tuple<F, Args...> state;
+    };
+
+    static DWORD WINAPI thread_entry(LPVOID parameter) {
+        task_base* task = static_cast<task_base*>(parameter);
+        task->run();
+        delete task;
+        return 0;
+    }
+
+    HANDLE handle_ = nullptr;
+    DWORD id_ = 0;
+};
+
+inline void swap(thread& lhs, thread& rhs) noexcept { lhs.swap(rhs); }
+
+template <>
+struct hash<thread::id> {
+    size_t operator()(thread::id value) const noexcept {
+        return hash<unsigned long>()(value.value());
+    }
+};
+
+namespace this_thread {
+
+inline thread::id get_id() noexcept { return thread::id(GetCurrentThreadId()); }
+
+inline void yield() noexcept { SwitchToThread(); }
+
+template <class Rep, class Period>
+void sleep_for(const chrono::duration<Rep, Period>& duration) {
+    if (duration <= chrono::duration<Rep, Period>::zero()) return;
+    auto milliseconds = chrono::duration_cast<chrono::milliseconds>(duration);
+    if (milliseconds < duration) milliseconds += chrono::milliseconds(1);
+    Sleep(static_cast<DWORD>(milliseconds.count()));
+}
+
+template <class Clock, class Duration>
+void sleep_until(const chrono::time_point<Clock, Duration>& time) {
+    const auto now = Clock::now();
+    if (time > now) sleep_for(time - now);
+}
+
+}  // namespace this_thread
+
+_LIBCPP_END_NAMESPACE_STD
+
+#endif

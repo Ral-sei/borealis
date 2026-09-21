@@ -20,9 +20,9 @@
 #include <borealis/core/thread.hpp>
 #include <exception>
 
-#ifdef BOREALIS_USE_STD_THREAD
+#if defined(BOREALIS_USE_STD_THREAD) && !defined(PLATFORM_XBOX360)
 #include <thread>
-#else
+#elif !defined(PLATFORM_XBOX360)
 #include <pthread.h>
 #endif
 
@@ -33,9 +33,9 @@
 namespace brls
 {
 
-#ifdef BOREALIS_USE_STD_THREAD
+#if defined(BOREALIS_USE_STD_THREAD) && !defined(PLATFORM_XBOX360)
 static std::thread *task_loop_thread = nullptr;
-#else
+#elif !defined(PLATFORM_XBOX360)
 static pthread_t task_loop_thread = pthread_t(0);
 #endif
 
@@ -66,19 +66,19 @@ void cancelDelay(size_t iter)
 
 void Threading::sync(const std::function<void()>& func)
 {
-    std::lock_guard<std::mutex> guard(m_sync_mutex);
+    PlatformLockGuard guard(m_sync_mutex);
     m_sync_functions.push_back(func);
 }
 
 void Threading::async(const std::function<void()>& task)
 {
-    std::lock_guard<std::mutex> guard(m_async_mutex);
+    PlatformLockGuard guard(m_async_mutex);
     m_async_tasks.push_back(task);
 }
 
 size_t Threading::delay(long milliseconds, const std::function<void()>& func)
 {
-    std::lock_guard<std::mutex> guard(m_delay_mutex);
+    PlatformLockGuard guard(m_delay_mutex);
     DelayOperation operation;
 #ifdef PS4
     operation.startPoint        = sceKernelGetProcessTime();
@@ -95,7 +95,7 @@ size_t Threading::delay(long milliseconds, const std::function<void()>& func)
 
 void Threading::cancelDelay(size_t iter)
 {
-    std::lock_guard<std::mutex> guard(m_delay_mutex);
+    PlatformLockGuard guard(m_delay_mutex);
     m_delay_cancel_set.insert(iter);
 }
 
@@ -108,14 +108,11 @@ void Threading::performSyncTasks()
 
     for (auto& f : local)
     {
-        try
-        {
-            f();
-        }
-        catch (std::exception& e)
-        {
-            brls::Logger::error("error: performSyncTasks: {}", e.what());
-        }
+#if defined(__cpp_exceptions)
+        try { f(); } catch (std::exception& e) { brls::Logger::error("error: performSyncTasks: {}", e.what()); }
+#else
+        f();
+#endif
     }
 
     m_delay_mutex.lock();
@@ -144,14 +141,11 @@ void Threading::performSyncTasks()
 
         if (duration >= d.delayMilliseconds)
         {
-            try
-            {
-                d.func();
-            }
-            catch (std::exception& e)
-            {
-                brls::Logger::error("error: performSyncTasks(delay): {}", e.what());
-            }
+#if defined(__cpp_exceptions)
+            try { d.func(); } catch (std::exception& e) { brls::Logger::error("error: performSyncTasks(delay): {}", e.what()); }
+#else
+            d.func();
+#endif
 
             m_delay_mutex.lock();
             if (m_delay_cancel_set.count(d.index)) m_delay_cancel_set.erase(d.index);
@@ -169,12 +163,19 @@ void Threading::performSyncTasks()
 
 void Threading::start()
 {
+#if defined(PLATFORM_XBOX360)
+    return;
+#else
     task_loop_active = true;
     start_task_loop();
+#endif
 }
 
 void Threading::stop()
 {
+#if defined(PLATFORM_XBOX360)
+    return;
+#else
     task_loop_active = false;
 
 #ifdef BOREALIS_USE_STD_THREAD
@@ -183,6 +184,7 @@ void Threading::stop()
     task_loop_thread = nullptr;
 #else
     pthread_join(task_loop_thread, NULL);
+#endif
 #endif
 }
 void Threading::std_task_loop() {
@@ -194,7 +196,7 @@ void* Threading::task_loop(void* a)
     {
         std::vector<std::function<void()>> m_tasks_copy;
         {
-            std::lock_guard<std::mutex> guard(m_async_mutex);
+            PlatformLockGuard guard(m_async_mutex);
             m_tasks_copy = m_async_tasks;
             m_async_tasks.clear();
         }
@@ -211,10 +213,14 @@ void* Threading::task_loop(void* a)
 
 void Threading::start_task_loop()
 {
+#if defined(PLATFORM_XBOX360)
+    return;
+#else
 #ifdef BOREALIS_USE_STD_THREAD
     task_loop_thread = new std::thread(std_task_loop);
 #else
     pthread_create(&task_loop_thread, NULL, task_loop, NULL);
+#endif
 #endif
 }
 

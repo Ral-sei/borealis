@@ -14,7 +14,9 @@
     limitations under the License.
 */
 
+#if !defined(PLATFORM_XBOX360)
 #include <unistd.h>
+#endif
 
 #include <borealis/core/application.hpp>
 #include <borealis/core/assets.hpp>
@@ -28,7 +30,17 @@ namespace brls
 
 bool FontLoader::loadFontFromFile(std::string fontName, std::string filePath)
 {
-    if (access(filePath.c_str(), F_OK) != -1)
+    bool exists = false;
+#if defined(PLATFORM_XBOX360)
+    if (std::FILE* file = std::fopen(filePath.c_str(), "rb"))
+    {
+        std::fclose(file);
+        exists = true;
+    }
+#else
+    exists = access(filePath.c_str(), F_OK) != -1;
+#endif
+    if (exists)
     {
         bool loaded = Application::loadFontFromFile(fontName, filePath);
 

@@ -229,7 +229,9 @@ bool Application::internalMainLoop()
         Time interval  = Application::limitedFrameTime - deltaTime;
         if (interval > 0)
         {
+#if !defined(PLATFORM_XBOX360)
             std::this_thread::sleep_for(std::chrono::microseconds(interval));
+#endif
         }
     }
 

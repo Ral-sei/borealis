@@ -106,7 +106,11 @@ class BoundView
             this->view = dynamic_cast<T*>(this->ownerView->getView(this->id));
 
             if (!this->view)
+#if defined(__cpp_exceptions)
                 throw ViewNotFoundException(this->ownerView, this->id);
+#else
+                std::terminate();
+#endif
         }
         // Then resolve by owner view
         else if (this->ownerActivity)
@@ -114,11 +118,19 @@ class BoundView
             this->view = (T*)this->ownerActivity->getView(this->id);
 
             if (!this->view)
+#if defined(__cpp_exceptions)
                 throw ViewNotFoundException(this->ownerActivity, this->id);
+#else
+                std::terminate();
+#endif
         }
         else
         {
+#if defined(__cpp_exceptions)
             throw std::logic_error("No owner view or activity given to BoundView");
+#else
+            std::terminate();
+#endif
         }
     }
 };

@@ -20,8 +20,32 @@
 #ifndef BRLS_RESOURCES
 #error BRLS_RESOURCES define missing
 #endif
-#ifdef USE_LIBROMFS
-#define BRLS_ASSET(_str) "@res/" _str
+
+#include <string>
+
+#ifdef PLATFORM_XBOX360
+namespace brls {
+// The Xbox 360 XDK CRT only accepts backslash path separators ("game:\..."),
+// while borealis and wiliwili build resource paths with forward slashes.
+// Normalize the fully concatenated path here so every BRLS_ASSET call site
+// stays portable; call sites must pass the whole relative path to BRLS_ASSET
+// instead of appending to its result.
+inline std::string normalizeAssetPath(std::string path) {
+    for (auto& c : path) {
+        if (c == '/')
+            c = '\\';
+    }
+    return path;
+}
+inline std::string resourcesDir() {
+    static std::string s = normalizeAssetPath(BRLS_RESOURCES);
+    return s;
+}
+inline std::string assetPath(const std::string& relativePath) {
+    return normalizeAssetPath(resourcesDir() + relativePath);
+}
+}
+#define BRLS_ASSET(_str) (::brls::assetPath(_str))
 #else
-#define BRLS_ASSET(_str) BRLS_RESOURCES _str
+#define BRLS_ASSET(_str) (std::string(BRLS_RESOURCES) + _str)
 #endif

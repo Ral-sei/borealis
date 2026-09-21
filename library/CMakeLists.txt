@@ -43,7 +43,8 @@ if (USE_BOOST_FILESYSTEM)
         list(APPEND BRLS_PLATFORM_OPTION -DUSE_BOOST_FILESYSTEM)
     endif()
 elseif ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9.1) OR
-    (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND NOT WIN32) AND NOT PLATFORM_ANDROID AND NOT PLATFORM_PS4)
+    (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND NOT WIN32) AND NOT PLATFORM_ANDROID AND NOT PLATFORM_PS4 AND NOT PLATFORM_XBOX360)
+    # Xbox 360 links a freestanding OXDK libc++; there is no host stdc++fs.
     list(APPEND BRLS_PLATFORM_LIBS stdc++fs)
 endif ()
 
@@ -66,7 +67,7 @@ else()
 endif()
 
 # dbus
-if (UNIX AND NOT APPLE AND NOT USE_SDL2)
+if (UNIX AND NOT APPLE AND NOT USE_SDL2 AND NOT PLATFORM_XBOX360)
     find_package(DBus)
     list(APPEND BOREALIS_INCLUDE ${DBUS_INCLUDE_DIRS})
     list(APPEND BRLS_PLATFORM_LIBS ${DBUS_LIBRARIES})
@@ -248,6 +249,12 @@ elseif(PLATFORM_SWITCH)
         list(APPEND BRLS_PLATFORM_LIBS glfw3 EGL glapi drm_nouveau nx m)
     endif ()
     set(BRLS_PLATFORM_RESOURCES_PATH "\"romfs:/\"")
+elseif(PLATFORM_XBOX360)
+    # Xbox 360 uses the XDK D3D9/NanoVG backend and direct XInput platform
+    # implementation; no desktop window backend is selected here.
+    list(APPEND BOREALIS_SOURCE ${BOREALIS_PATH}/lib/platforms/xbox360)
+    list(APPEND BRLS_PLATFORM_OPTION -DPLATFORM_XBOX360 -D__XBOX360__ -D_XBOX360)
+    set(BRLS_PLATFORM_RESOURCES_PATH "\"game:\\\\resources\\\\\"")
 else ()
     message(FATAL_ERROR "Please set build target. Example: -DPLATFORM_DESKTOP=ON or -DPLATFORM_SWITCH=ON")
 endif ()
@@ -269,12 +276,23 @@ list(APPEND BOREALIS_SOURCE
         ${BOREALIS_PATH}/lib/extern/libretro-common/encodings
         ${BOREALIS_PATH}/lib/extern/libretro-common/features
         )
-if (PLATFORM_PSV OR PLATFORM_PS4 OR BOREALIS_USE_D3D11)
+if (PLATFORM_PSV OR PLATFORM_PS4 OR BOREALIS_USE_D3D11 OR BOREALIS_USE_D3D9)
         list(REMOVE_ITEM BOREALIS_SOURCE ${BOREALIS_PATH}/lib/extern/glad)
 endif ()
 
 # nanovg
-list(APPEND BOREALIS_SRC ${BOREALIS_PATH}/lib/extern/nanovg/nanovg.c)
+if (XBOX360_NANOVG_D3D9)
+    # nanovg_d3d ships a matching core and backend. Do not compile it together
+    # with borealis' OpenGL core: both export the same NanoVG symbols.
+    set(NANOVG_D3D9_PATH ${BOREALIS_PATH}/lib/extern/nanovg_d3d/src)
+    list(INSERT BOREALIS_INCLUDE 0 ${NANOVG_D3D9_PATH})
+    list(APPEND BOREALIS_SRC
+            ${NANOVG_D3D9_PATH}/nanovg.c
+            ${BOREALIS_PATH}/lib/platforms/xbox360/nanovg_d3d9_backend.cpp)
+    list(APPEND BRLS_PLATFORM_OPTION -DNANOVG_D3D9)
+else ()
+    list(APPEND BOREALIS_SRC ${BOREALIS_PATH}/lib/extern/nanovg/nanovg.c)
+endif ()
 if (BRLS_FONTSTASH_STREAM)
     set_source_files_properties(
         ${BOREALIS_PATH}/lib/extern/nanovg/nanovg.c
@@ -296,6 +314,9 @@ endforeach (lib)
 
 # borealis 图形 driver
 set(BOREALIS_DRIVER BOREALIS_USE_OPENGL)
+if (BOREALIS_USE_D3D9)
+    set(BOREALIS_DRIVER BOREALIS_USE_D3D9)
+endif ()
 if (BOREALIS_USE_METAL)
     set(BOREALIS_DRIVER BOREALIS_USE_METAL)
 elseif (BOREALIS_USE_D3D11)

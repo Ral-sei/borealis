@@ -505,7 +505,7 @@ void Box::inflateFromXMLRes(const std::string& name)
 #ifdef USE_LIBROMFS
     return Box::inflateFromXMLString(romfs::get(name).string());
 #else
-    return Box::inflateFromXMLFile(std::string(BRLS_RESOURCES) + name);
+    return Box::inflateFromXMLFile(BRLS_ASSET(name));
 #endif
 }
 

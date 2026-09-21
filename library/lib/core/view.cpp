@@ -23,6 +23,8 @@
 #include <tinyxml2.h>
 #include <yoga/YGNode.h>
 #include <algorithm>
+#include <cerrno>
+#include <cstdlib>
 #include <sstream>
 #include <functional>
 #include <borealis/core/animation.hpp>
@@ -45,6 +47,21 @@ using namespace brls::literals;
 
 namespace brls
 {
+
+static bool parseFloat(const std::string& text, float* result)
+{
+    if (text.empty())
+        return false;
+
+    char* end = nullptr;
+    errno     = 0;
+    float value = std::strtof(text.c_str(), &end);
+    if (errno == ERANGE || end == text.c_str() || *end != '\0')
+        return false;
+
+    *result = value;
+    return true;
+}
 
 void AppletFrameItem::setHintView(View* hintView)
 {
@@ -1566,7 +1583,7 @@ std::string View::getFilePathXMLAttributeValue(std::string value)
 #ifdef USE_LIBROMFS
         return resPath;
 #else
-        return std::string(BRLS_RESOURCES) + resPath;
+        return BRLS_ASSET(resPath);
 #endif
     }
 
@@ -1635,9 +1652,9 @@ bool View::applyXMLAttribute(std::string name, std::string value)
     {
         // Strip the px and parse the float value
         std::string newFloat = value.substr(0, value.length() - 2);
-        try
+        float floatValue;
+        if (parseFloat(newFloat, &floatValue))
         {
-            float floatValue = std::stof(newFloat);
             if (this->floatAttributes.count(name) > 0)
             {
                 this->floatAttributes[name](floatValue);
@@ -1648,10 +1665,7 @@ bool View::applyXMLAttribute(std::string name, std::string value)
                 return false;
             }
         }
-        catch (const std::invalid_argument& exception)
-        {
-            return false;
-        }
+        return false;
     }
 
     // Ends with % -> percentage
@@ -1659,10 +1673,9 @@ bool View::applyXMLAttribute(std::string name, std::string value)
     {
         // Strip the % and parse the float value
         std::string newFloat = value.substr(0, value.length() - 1);
-        try
+        float floatValue;
+        if (parseFloat(newFloat, &floatValue))
         {
-            float floatValue = std::stof(newFloat);
-
             if (floatValue < -100 || floatValue > 100)
                 return false;
 
@@ -1676,10 +1689,7 @@ bool View::applyXMLAttribute(std::string name, std::string value)
                 return false;
             }
         }
-        catch (const std::invalid_argument& exception)
-        {
-            return false;
-        }
+        return false;
     }
     // Starts with @style -> float
     else if (startsWith(value, "@style/"))
@@ -1793,9 +1803,9 @@ bool View::applyXMLAttribute(std::string name, std::string value)
     }
 
     // Valid float -> float, otherwise unknown attribute
-    try
+    float newValue;
+    if (parseFloat(value, &newValue))
     {
-        float newValue = std::stof(value);
         if (this->floatAttributes.count(name) > 0)
         {
             this->floatAttributes[name](newValue);
@@ -1806,10 +1816,7 @@ bool View::applyXMLAttribute(std::string name, std::string value)
             return false;
         }
     }
-    catch (const std::invalid_argument& exception)
-    {
-        return false;
-    }
+    return false;
 }
 
 void View::applyXMLAttributes(tinyxml2::XMLElement* element)
@@ -1843,7 +1850,7 @@ View* View::createFromXMLResource(std::string name)
 #ifdef USE_LIBROMFS
     return View::createFromXMLString(romfs::get("xml/" + name).string());
 #else
-    return View::createFromXMLFile(std::string(BRLS_RESOURCES) + "xml/" + name);
+    return View::createFromXMLFile(BRLS_ASSET("xml/" + name));
 #endif
 }
 

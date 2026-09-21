@@ -1,0 +1,34 @@
+#pragma once
+
+// OXDK libc++ is built with _LIBCPP_HAS_THREADS=0 and therefore does not
+// provide std::mutex.  Keep source compatibility for application code that
+// still declares mutex members; Xbox 360's current port is single-threaded.
+namespace std {
+class mutex {
+public:
+    mutex() noexcept = default;
+    ~mutex() = default;
+    mutex(const mutex&) = delete;
+    mutex& operator=(const mutex&) = delete;
+    void lock() noexcept {}
+    bool try_lock() noexcept { return true; }
+    void unlock() noexcept {}
+};
+
+class recursive_mutex : public mutex {};
+
+class condition_variable {
+public:
+    condition_variable() noexcept = default;
+    ~condition_variable() = default;
+    condition_variable(const condition_variable&) = delete;
+    condition_variable& operator=(const condition_variable&) = delete;
+    template <class Lock>
+    void wait(Lock&) noexcept {}
+    template <class Lock, class Predicate>
+    void wait(Lock&, Predicate pred) { while (!pred()) {} }
+    void notify_one() noexcept {}
+    void notify_all() noexcept {}
+};
+
+}

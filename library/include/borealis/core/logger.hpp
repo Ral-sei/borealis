@@ -34,7 +34,7 @@
 #include <fmt/chrono.h>
 
 #include <borealis/core/event.hpp>
-#include <mutex>
+#include <borealis/core/xbox360_mutex.hpp>
 #include <string>
 
 namespace brls
@@ -104,12 +104,14 @@ class Logger
 #endif
         std::string log = fmt::format(format, std::forward<Args>(args)...);
 
-        std::unique_lock<std::mutex> lock;
+        PlatformUniqueLock lock;
         if (Logger::threadSafeLogging)
-            lock = std::unique_lock { logMtx };
+            lock = PlatformUniqueLock { logMtx };
 
+#if defined(__cpp_exceptions)
         try
         {
+#endif
 #ifdef IOS
             fmt::print(logOut, "{:%H:%M:%S}.{:03d} {} {}\n", time_tm, (int)ms, color, log);
 #elif defined(ANDROID)
@@ -123,12 +125,14 @@ class Logger
 #endif
 
             logEvent.fire(now, level, log);
+#if defined(__cpp_exceptions)
         }
         catch (const std::exception& e)
         {
             // will be printed after the first fmt::print (so after the log tag)
             printf("! Invalid log format string: \"%s\": %s\n", fmt::basic_string_view<char>(format).data(), e.what());
         }
+#endif
 
 #ifdef __MINGW32__
         fflush(logOut);
@@ -171,7 +175,7 @@ class Logger
     }
 
   private:
-    inline static std::mutex logMtx;
+    inline static PlatformMutex logMtx;
     inline static bool threadSafeLogging = true;
     inline static Event<TimePoint, LogLevel, std::string> logEvent;
     inline static std::FILE *logOut = stdout;

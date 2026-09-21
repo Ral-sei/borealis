@@ -308,7 +308,7 @@ void Image::setImageFromRes(const std::string& path)
     this->setImageFromMem((unsigned char*)image.data(), (int)image.size());
     TextureCache::instance().addCache("@res/" + path, this->texture);
 #else
-    this->setImageFromFile(std::string(BRLS_RESOURCES) + path);
+    this->setImageFromFile(BRLS_ASSET(path));
 #endif
 }
 

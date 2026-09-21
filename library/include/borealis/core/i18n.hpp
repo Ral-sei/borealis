@@ -68,6 +68,7 @@ std::string getStr(std::string stringName, Args&&... args)
 {
     std::string rawStr = internal::getRawStr(stringName);
 
+#if defined(__cpp_exceptions)
     try
     {
         return fmt::format(fmt::runtime(rawStr), args...);
@@ -77,6 +78,9 @@ std::string getStr(std::string stringName, Args&&... args)
         Logger::error("Invalid format \"{}\" from string \"{}\": {}", rawStr, stringName, e.what());
         return stringName;
     }
+#else
+    return fmt::format(fmt::runtime(rawStr), args...);
+#endif
 }
 
 /**
