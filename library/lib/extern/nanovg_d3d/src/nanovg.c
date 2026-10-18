@@ -26,7 +26,11 @@
 #define STBTT_STATIC
 #include "fontstash.h"
 #define STB_IMAGE_IMPLEMENTATION
-#define STB_IMAGE_STATIC
+/* Xbox 360: wiliwili's image_helper/video_snapshot_core call stbi_* directly, so
+   the implementation must be exported here (the GL nanovg.c upstream does not
+   define STB_IMAGE_STATIC either). With STB_IMAGE_STATIC the symbols stay local
+   and the final link fails on stbi_load_from_memory/stbi_image_free/
+   stbi_failure_reason. */
 #include "stb_image.h"
 
 #ifdef _MSC_VER
@@ -83,6 +87,7 @@ struct NVGstate {
 	float letterSpacing;
 	float lineHeight;
 	float fontBlur;
+	float fontDilate;
 	float fontQuality;
 	int textAlign;
 	int fontId;
@@ -664,6 +669,7 @@ void nvgReset(NVGcontext* ctx)
 	state->letterSpacing = 0.0f;
 	state->lineHeight = 1.0f;
 	state->fontBlur = 0.0f;
+	state->fontDilate = 0.0f;
 	state->fontQuality = 1.0f;
 	state->textAlign = NVG_ALIGN_LEFT | NVG_ALIGN_BASELINE;
 	state->fontId = 0;
@@ -2352,6 +2358,12 @@ void nvgFontBlur(NVGcontext* ctx, float blur)
 	state->fontBlur = blur;
 }
 
+void nvgFontDilate(NVGcontext* ctx, float dilate)
+{
+	NVGstate* state = nvg__getState(ctx);
+	state->fontDilate = dilate;
+}
+
 void nvgFontQuality(NVGcontext* ctx, float quality)
 {
 	NVGstate* state = nvg__getState(ctx);
@@ -2478,6 +2490,7 @@ float nvgText(NVGcontext* ctx, float x, float y, const char* string, const char*
 	fonsSetSize(ctx->fs, state->fontSize*scale);
 	fonsSetSpacing(ctx->fs, state->letterSpacing*scale);
 	fonsSetBlur(ctx->fs, state->fontBlur*scale);
+	fonsSetDilate(ctx->fs, state->fontDilate);
 	fonsSetAlign(ctx->fs, state->textAlign);
 	fonsSetFont(ctx->fs, state->fontId);
 
@@ -2547,6 +2560,7 @@ float nvgTextWithCursor(NVGcontext* ctx, float x, float y, const char* string, c
 	fonsSetSize(ctx->fs, state->fontSize*scale);
 	fonsSetSpacing(ctx->fs, state->letterSpacing*scale);
 	fonsSetBlur(ctx->fs, state->fontBlur*scale);
+	fonsSetDilate(ctx->fs, state->fontDilate);
 	fonsSetAlign(ctx->fs, state->textAlign);
 	fonsSetFont(ctx->fs, state->fontId);
 
@@ -2708,6 +2722,7 @@ int nvgTextGlyphPositions(NVGcontext* ctx, float x, float y, const char* string,
 	fonsSetSize(ctx->fs, state->fontSize*scale);
 	fonsSetSpacing(ctx->fs, state->letterSpacing*scale);
 	fonsSetBlur(ctx->fs, state->fontBlur*scale);
+	fonsSetDilate(ctx->fs, state->fontDilate);
 	fonsSetAlign(ctx->fs, state->textAlign);
 	fonsSetFont(ctx->fs, state->fontId);
 
@@ -2772,6 +2787,7 @@ int nvgTextBreakLines(NVGcontext* ctx, const char* string, const char* end, floa
 	fonsSetSize(ctx->fs, state->fontSize*scale);
 	fonsSetSpacing(ctx->fs, state->letterSpacing*scale);
 	fonsSetBlur(ctx->fs, state->fontBlur*scale);
+	fonsSetDilate(ctx->fs, state->fontDilate);
 	fonsSetAlign(ctx->fs, state->textAlign);
 	fonsSetFont(ctx->fs, state->fontId);
 
@@ -2956,6 +2972,7 @@ float nvgTextBounds(NVGcontext* ctx, float x, float y, const char* string, const
 	fonsSetSize(ctx->fs, state->fontSize*scale);
 	fonsSetSpacing(ctx->fs, state->letterSpacing*scale);
 	fonsSetBlur(ctx->fs, state->fontBlur*scale);
+	fonsSetDilate(ctx->fs, state->fontDilate);
 	fonsSetAlign(ctx->fs, state->textAlign);
 	fonsSetFont(ctx->fs, state->fontId);
 
@@ -3000,6 +3017,7 @@ void nvgTextBoxBounds(NVGcontext* ctx, float x, float y, float breakRowWidth, co
 	fonsSetSize(ctx->fs, state->fontSize*scale);
 	fonsSetSpacing(ctx->fs, state->letterSpacing*scale);
 	fonsSetBlur(ctx->fs, state->fontBlur*scale);
+	fonsSetDilate(ctx->fs, state->fontDilate);
 	fonsSetAlign(ctx->fs, state->textAlign);
 	fonsSetFont(ctx->fs, state->fontId);
 	fonsLineBounds(ctx->fs, 0, &rminy, &rmaxy);
@@ -3051,6 +3069,7 @@ void nvgTextMetrics(NVGcontext* ctx, float* ascender, float* descender, float* l
 	fonsSetSize(ctx->fs, state->fontSize*scale);
 	fonsSetSpacing(ctx->fs, state->letterSpacing*scale);
 	fonsSetBlur(ctx->fs, state->fontBlur*scale);
+	fonsSetDilate(ctx->fs, state->fontDilate);
 	fonsSetAlign(ctx->fs, state->textAlign);
 	fonsSetFont(ctx->fs, state->fontId);
 

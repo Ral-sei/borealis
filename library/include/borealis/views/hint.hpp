@@ -22,6 +22,8 @@
 #include <borealis/views/image.hpp>
 #include <borealis/views/label.hpp>
 
+#include <map>
+
 namespace brls
 {
 
@@ -30,9 +32,18 @@ class Hint : public Box
   public:
     Hint(std::shared_ptr<Action> action, bool allowAButtonTouch = false);
     static std::string getKeyIcon(ControllerButton button, bool ignoreKeysSwap = false);
+#if defined(PLATFORM_XBOX360)
+    // 第 5 轮：焦点切换冻结已归因到“每次 refill 全量 new/delete Hint”。
+    // 池化复用时调用：只更新动作指向、按钮图标、提示文本与禁用色，
+    // 不再走 inflate（~700ms）。手势监听里现读 this->action，换指向即生效。
+    void applyAction(const std::shared_ptr<Action>& action, bool allowAButtonTouch);
+#endif
 
   private:
     std::shared_ptr<Action> action;
+#if defined(PLATFORM_XBOX360)
+    bool allowAButtonTouch = false;
+#endif
 
     BRLS_BIND(Label, icon, "icon");
     BRLS_BIND(Label, hint, "hint");
@@ -73,6 +84,11 @@ class Hints : public Box
     bool forceShown             = false;
 
     VoidEvent::Subscription hintSubscription;
+#if defined(PLATFORM_XBOX360)
+    // 按按钮缓存已创建的 Hint（每个按键最多一个，与 refill 的
+    // addedButtons 去重一致）；~Hints 统一释放。
+    std::map<ControllerButton, Hint*> hintPool;
+#endif
 };
 
 } // namespace brls

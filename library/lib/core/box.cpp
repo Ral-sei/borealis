@@ -20,7 +20,9 @@
 
 #include <borealis/core/application.hpp>
 #include <borealis/core/box.hpp>
+#include <borealis/core/logger.hpp>
 #include <borealis/core/util.hpp>
+#include <borealis/platforms/xbox360/xbox360_perf.hpp>
 #include <cmath>
 #include <fstream>
 #include <functional>
@@ -763,7 +765,18 @@ Box::~Box()
         it->setParent(nullptr);
         if (!it->isPtrLocked())
         {
+#if defined(PLATFORM_XBOX360)
+            // 第 4 轮：逐子视图析构计时（覆盖派生析构体，如 ~Label 的滚动停止），
+            // 与外层 loop:delete 总时长、~View 分段行三方对账 Hint 1.45s 慢析构。
+            const std::string childDesc = it->describe();
+            const auto cdT0 = xbox360perf::nowUsec();
+#endif
             delete it;
+#if defined(PLATFORM_XBOX360)
+            const double cdMs = xbox360perf::msSince(cdT0);
+            if (cdMs > 100)
+                X360_PROBE_INFO("[x360-perf] child dtor took {:.0f} ms: {}", cdMs, childDesc);
+#endif
         }
         else
         {

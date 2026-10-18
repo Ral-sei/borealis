@@ -64,6 +64,20 @@ class BoundView
         return this->view;
     }
 
+    // Resolve an optional child without treating a lazily-created XML tab as
+    // an error. This is useful for tab frames that instantiate only the
+    // currently selected page.
+    T* getViewIfPresent()
+    {
+        if (this->view)
+            return this->view;
+        if (this->ownerView)
+            return static_cast<T*>(this->ownerView->getView(this->id));
+        if (this->ownerActivity)
+            return static_cast<T*>(this->ownerActivity->getView(this->id));
+        return nullptr;
+    }
+
     operator T*()
     {
         return this->getView();
@@ -103,7 +117,14 @@ class BoundView
         // Resolve by owner activity first
         if (this->ownerView)
         {
+#if defined(PLATFORM_XBOX360)
+            // Xenon RTTI cannot reliably dynamic_cast across the platform
+            // view hierarchy. BRLS_BIND contracts the XML id and type, so use
+            // that contract directly on Xbox while retaining the null check.
+            this->view = static_cast<T*>(this->ownerView->getView(this->id));
+#else
             this->view = dynamic_cast<T*>(this->ownerView->getView(this->id));
+#endif
 
             if (!this->view)
 #if defined(__cpp_exceptions)

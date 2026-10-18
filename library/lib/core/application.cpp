@@ -30,6 +30,7 @@
 #include <borealis/core/thread.hpp>
 #include <borealis/core/time.hpp>
 #include <borealis/core/util.hpp>
+#include <borealis/platforms/xbox360/xbox360_perf.hpp>
 #include <borealis/views/bottom_bar.hpp>
 #include <borealis/views/button.hpp>
 #include <borealis/views/cells/cell_bool.hpp>
@@ -167,6 +168,10 @@ bool Application::mainLoop()
 
 bool Application::internalMainLoop()
 {
+    // 物种 B（sync 之外的主线程冻结）探针：每个帧间段各有一个阶段名，
+    // 看门狗 4s 未推进即 [stall-task] 点名。非 Xbox 平台这些是空内联。
+    xbox360perf::stageSetMainThread();
+    xbox360perf::stageMark("loop:head");
     Application::updateFPS();
     Application::frameStartTime = getCPUTimeUsec();
     Application::setActiveEvent(false);
@@ -180,6 +185,10 @@ bool Application::internalMainLoop()
     }
 
     // Mouse and touch
+    xbox360perf::stageMark("loop:input");
+#if defined(PLATFORM_XBOX360)
+    const auto inT0 = xbox360perf::nowUsec();
+#endif
     if (Application::blockInputsTokens == 0)
     {
         Application::processInput();
@@ -190,30 +199,73 @@ bool Application::internalMainLoop()
         if (!muteSounds)
             Application::getAudioPlayer()->play(Sound::SOUND_CLICK_ERROR);
     }
+#if defined(PLATFORM_XBOX360)
+    const double inMs = xbox360perf::msSince(inT0);
+    if (inMs > 500)
+        X360_PROBE_INFO("[x360-perf] loop:input took {:.0f} ms", inMs);
+#endif
 
     // Animations
+    xbox360perf::stageMark("loop:tick");
+#if defined(PLATFORM_XBOX360)
+    const auto tkT0 = xbox360perf::nowUsec();
+#endif
 #ifndef SIMPLE_HIGHLIGHT
     updateHighlightAnimation();
 #endif
     Ticking::updateTickings();
+#if defined(PLATFORM_XBOX360)
+    const double tkMs = xbox360perf::msSince(tkT0);
+    if (tkMs > 500)
+        X360_PROBE_INFO("[x360-perf] loop:tick took {:.0f} ms", tkMs);
+#endif
 
     // Render
     Application::frame();
 
     // Run sync functions
+    xbox360perf::begin(xbox360perf::PHASE_SYNC);
     Threading::performSyncTasks();
+    xbox360perf::end(xbox360perf::PHASE_SYNC);
+
+    // Report the [x360-perf] frame breakdown roughly every two seconds.
+    xbox360perf::stageMark("loop:report");
+    xbox360perf::report();
 
     // Trigger RunLoop subscribers
+    xbox360perf::stageMark("loop:runloop-evt");
+#if defined(PLATFORM_XBOX360)
+    const auto rlT0 = xbox360perf::nowUsec();
+#endif
     runLoopEvent.fire();
+#if defined(PLATFORM_XBOX360)
+    const double rlMs = xbox360perf::msSince(rlT0);
+    if (rlMs > 500)
+        X360_PROBE_INFO("[x360-perf] loop:runloop-evt took {:.0f} ms", rlMs);
+#endif
 
     // Free views deletion pool.
     // A view deletion might inserts other views to deletionPool
+    xbox360perf::stageMark("loop:delete");
     std::deque<View*> undeletedViews;
     for (auto view : Application::deletionPool)
     {
         if (!view->isPtrLocked())
         {
+#if defined(PLATFORM_XBOX360)
+            // 逐视图阶段（第 3 轮）：10s 析构冻结直接给出视图名；>500ms 的
+            // 慢析构（不足看门狗 4s 阈值）也留一条实名记录，供与焦点动作
+            // 对账（提示栏重建会把旧 Hint 视图推进这里）。
+            const std::string desc = view->describe();
+            xbox360perf::stageMark(("loop:delete " + desc).c_str());
+            const auto dt0 = xbox360perf::nowUsec();
+#endif
             delete view;
+#if defined(PLATFORM_XBOX360)
+            const double dtms = xbox360perf::msSince(dt0);
+            if (dtms > 500)
+                X360_PROBE_INFO("[x360-perf] view dtor took {:.0f} ms: {}", dtms, desc);
+#endif
         }
         else
         {
@@ -229,9 +281,7 @@ bool Application::internalMainLoop()
         Time interval  = Application::limitedFrameTime - deltaTime;
         if (interval > 0)
         {
-#if !defined(PLATFORM_XBOX360)
             std::this_thread::sleep_for(std::chrono::microseconds(interval));
-#endif
         }
     }
 
@@ -758,14 +808,17 @@ void Application::frame()
     frameContext.theme      = Application::getTheme();
 
     // Begin frame and clear
+    xbox360perf::begin(xbox360perf::PHASE_BEGIN);
     videoContext->beginFrame();
     videoContext->clear(Application::getTheme().getColor("brls/clear"));
     float scaleFactor = videoContext->getScaleFactor();
 
     nvgBeginFrame(frameContext.vg, Application::windowWidth, Application::windowHeight, scaleFactor);
     nvgScale(frameContext.vg, Application::windowScale, Application::windowScale);
+    xbox360perf::end(xbox360perf::PHASE_BEGIN);
 
     std::vector<View*> viewsToDraw;
+    xbox360perf::begin(xbox360perf::PHASE_BUILD);
 
     // Draw all activities in the stack
     // until we find one that's not translucent
@@ -810,9 +863,15 @@ void Application::frame()
 
     // End frame
     nvgResetTransform(Application::getNVGContext()); // scale
-    nvgEndFrame(Application::getNVGContext());
+    xbox360perf::end(xbox360perf::PHASE_BUILD);
 
+    xbox360perf::begin(xbox360perf::PHASE_FLUSH);
+    nvgEndFrame(Application::getNVGContext());
+    xbox360perf::end(xbox360perf::PHASE_FLUSH);
+
+    xbox360perf::begin(xbox360perf::PHASE_PRESENT);
     Application::platform->getVideoContext()->endFrame();
+    xbox360perf::end(xbox360perf::PHASE_PRESENT);
 }
 
 void Application::exit()
@@ -888,9 +947,23 @@ void Application::giveFocus(View* view)
 
     if (oldFocus != newFocus && newFocus != nullptr)
     {
+        // 直播间"移动选中框就卡"排查（第 3 轮，非 Xbox 是空内联）：焦点链
+        // 拆成三段，冻结时 [stall-task] 直接指到 lost/gained/hints 段；配合
+        // View::onFocus* 里的实名标记和 Logger 内部的 log:* 标记，可区分
+        // "卡在哪个回调 / 提示栏重建 / 日志输出本身"。
+        xbox360perf::stageMark("focus:lost");
+#if defined(PLATFORM_XBOX360)
+        Logger::info("[focus] -> {}", newFocus->describe());
+        // 第 4 轮：焦点链总长 + 三段实测。7.2s 冻结就发生在 [focus] 行之后，
+        // 但每段可能都 <1.5s（stall 行捕不到），这里用 >500ms 硬测量兜底。
+        const auto fcT0 = xbox360perf::nowUsec();
+#endif
         if (oldFocus)
             oldFocus->onFocusLost();
-
+#if defined(PLATFORM_XBOX360)
+        const auto fcT1 = xbox360perf::nowUsec();
+#endif
+        xbox360perf::stageMark("focus:gained");
         Application::currentFocus = newFocus;
         Application::globalFocusChangeEvent.fire(newFocus);
 
@@ -899,8 +972,19 @@ void Application::giveFocus(View* view)
             newFocus->onFocusGained();
             Logger::debug("Giving focus to {}", newFocus->describe());
         }
-
+#if defined(PLATFORM_XBOX360)
+        const auto fcT2 = xbox360perf::nowUsec();
+#endif
+        xbox360perf::stageMark("focus:hints");
         Application::globalHintsUpdateEvent.fire();
+#if defined(PLATFORM_XBOX360)
+        const double fcLost   = (fcT1 - fcT0) / 1000.0;
+        const double fcGained = (fcT2 - fcT1) / 1000.0;
+        const double fcHints  = xbox360perf::msSince(fcT2);
+        if (fcLost + fcGained + fcHints > 500)
+            X360_PROBE_INFO("[x360-perf] focus chain {:.0f} ms: lost {:.0f} gained {:.0f} hints {:.0f} -> {}",
+                         fcLost + fcGained + fcHints, fcLost, fcGained, fcHints, newFocus->describe());
+#endif
     }
 }
 

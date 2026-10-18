@@ -129,8 +129,19 @@ class LRUCache
     {
         if (c < 1)
             fatal("Cache capacity cannot less than 1.");
+#if defined(PLATFORM_XBOX360)
+        // P0 §5.11：Xbox360 物理内存 512MB，上游在用户设置值上再加 DEFAULT_CAPACITY(400)，
+        // 默认 200 → 600 张；而本平台封面用桌面尺寸 @672w_378h ≈ 1.02MB/张，600 张 ≈ 612MB
+        // 必然耗尽。实测：tex cache 371 张时可用堆已跌破 64MB，436 张时 heap>=0
+        // → stbi outofmem / 纹理创建失败（封面全不显示）/ curl 写 0x0 崩溃。
+        // 这里不叠加额外额度并硬限制 200 张（≈204MB，留 ≥200MB 余量给 mpv 与快照）。
+        // 参照：PSV 同为 512MB，靠 @256w_144h+DXT（≈147KB/张）把 401 张压到 59MB。
+        if (c > 200)
+            c = 200;
+#else
         // The setting standard of the DEFAULT_CAPACITY should be the upper limit of the number of all pictures.
         c += DEFAULT_CAPACITY;
+#endif
         this->capacity = c;
         if (cacheList.size() > capacity)
         {

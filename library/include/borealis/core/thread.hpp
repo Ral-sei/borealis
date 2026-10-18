@@ -22,6 +22,7 @@
 
 #include <chrono>
 #include <functional>
+#include <string>
 #include <borealis/core/xbox360_mutex.hpp>
 #if !defined(PLATFORM_XBOX360)
 #include <thread>
@@ -54,8 +55,12 @@ typedef std::vector<DelayOperation>::iterator DelayOperationIterator;
  * for queuing up UI-related state changes from other threads.
  *
  * It's a shortcut for brls::Application::sync(&func);
+ *
+ * tag（仅诊断）：显式指定本次入队的来源标签，优先于 HTTP 回调期间由
+ * setSyncEnqueueTag 设置的全局标签；performSyncTasks 打印慢任务(>=500ms)
+ * 与 [stall-task] 看门狗都会带上它。
  */
-extern void sync(const std::function<void()>& func);
+extern void sync(const std::function<void()>& func, const char* tag = nullptr);
 
 /**
  * Enqueue a function to be executed in
@@ -80,8 +85,17 @@ class Threading
      *
      * Borealis is not thread-safe, and sync() provides a mechanism
      * for queuing up UI-related state changes from other threads.
+     *
+     * tag（仅诊断）：显式来源标签，优先于全局 setSyncEnqueueTag 标签。
      */
-    static void sync(const std::function<void()>& func);
+    static void sync(const std::function<void()>& func, const char* tag = nullptr);
+
+    /**
+     * P0 §5.6-4 测量：为本次 sync 入队打上"来源标签"（如 HTTP 回调的接口名）。
+     * performSyncTasks 打印慢任务(>=500ms)时一并输出，用来定位是哪条业务链路
+     * 在主线程上耗时。全局单值：并发回调时会互相覆盖（仅诊断用，允许近似）。
+     */
+    static void setSyncEnqueueTag(const char* tag);
 
     /**
      * Enqueue a function to be executed in
@@ -114,6 +128,8 @@ class Threading
   private:
     inline static PlatformMutex m_sync_mutex;
     inline static std::vector<std::function<void()>> m_sync_functions;
+    /* 与 m_sync_functions 同步增删的来源标签（P0 §5.6-4 诊断用）。 */
+    inline static std::vector<std::string> m_sync_tags;
 
     inline static PlatformMutex m_async_mutex;
     inline static std::vector<std::function<void()>> m_async_tasks;

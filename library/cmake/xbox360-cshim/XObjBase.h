@@ -1,0 +1,4 @@
+#ifndef WILIWILI_XBOX360_XOBJBASE_CASE_SHIM_H
+#define WILIWILI_XBOX360_XOBJBASE_CASE_SHIM_H
+#include_next <xobjbase.h>
+#endif

@@ -279,12 +279,9 @@ void Image::invalidateImageBounds()
 
 size_t Image::checkCache(const std::string& path)
 {
-    if (this->texture > 0)
-    {
-        brls::TextureCache::instance().removeCache(this->texture);
-        brls::Logger::verbose("cache remove: {} {}", path, this->texture);
-    }
-
+    // P0 §5.11：旧纹理的引用改由 innerSetImage() 统一释放。这里不能再自己
+    // removeCache 一次，否则命中缓存时会双重释放 → count 下溢成巨大值 → 该条目
+    // 永远淘汰不掉。未命中时保持旧图可见，引用也应留在视图上。
     int tex = brls::TextureCache::instance().getCache(path);
     if (tex > 0)
     {
@@ -378,6 +375,13 @@ void Image::innerSetImage(int tex)
     // Free the old texture if necessary
     if (this->texture != 0 && this->freeTexture)
         nvgDeleteImage(vg, this->texture);
+    else if (this->texture != 0)
+        // P0 §5.11：旧纹理由 TextureCache 管理时必须释放引用计数。此前这里只处理
+        // freeTexture 分支，而所有调用者（checkCache / ImageHelper::load / requestImage）
+        // 都已经为新纹理取过引用，于是每次换图都泄漏一个 count。count 恒 >0 的条目
+        // LRU 永远淘汰不掉 → 缓存无限增长 → 512MB 物理内存耗尽（封面解码失败、
+        // 纹理创建失败、curl 写 NULL 崩溃）。
+        TextureCache::instance().removeCache(this->texture);
 
     // Set the new texture
     this->texture = tex;

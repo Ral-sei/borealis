@@ -34,6 +34,9 @@
 #include <borealis/core/input.hpp>
 #include <borealis/core/util.hpp>
 #include <borealis/core/view.hpp>
+#if defined(PLATFORM_XBOX360)
+#include <borealis/platforms/xbox360/xbox360_perf.hpp>
+#endif
 #include <borealis/views/applet_frame.hpp>
 #include <fstream>
 
@@ -81,20 +84,38 @@ AppletFrameItem::~AppletFrameItem()
 
 View::View()
 {
+#if defined(PLATFORM_XBOX360)
+    // 第 4 轮：Hint 构造 1.45s（与析构对称）嫌疑点之一是基类 View 构造，
+    // 拆 yoga 节点 / 公共属性注册 / 样式拷贝 三段，>100ms 才打印。
+    const auto vcT0 = xbox360perf::nowUsec();
+#endif
     // Instantiate and prepare YGNode
     this->ygNode = YGNodeNew();
     YGNodeSetContext(this->ygNode, this);
 
     YGNodeStyleSetWidthAuto(this->ygNode);
     YGNodeStyleSetHeightAuto(this->ygNode);
+#if defined(PLATFORM_XBOX360)
+    const auto vcT1 = xbox360perf::nowUsec();
+#endif
 
     // Register common XML attributes
     this->registerCommonAttributes();
+#if defined(PLATFORM_XBOX360)
+    const auto vcT2 = xbox360perf::nowUsec();
+#endif
 
     // Default values
     Style style = Application::getStyle();
 
     this->highlightCornerRadius = style["brls/highlight/corner_radius"];
+#if defined(PLATFORM_XBOX360)
+    const double vcTotal = xbox360perf::msSince(vcT0);
+    if (vcTotal > 100)
+        X360_PROBE_INFO("[x360-perf] View ctor {:.0f} ms | yoga {:.0f} attrs {:.0f} style {:.0f}",
+                     vcTotal, (vcT1 - vcT0) / 1000.0, (vcT2 - vcT1) / 1000.0,
+                     (xbox360perf::nowUsec() - vcT2) / 1000.0);
+#endif
 }
 
 static int shakeAnimation(float t, float a) // a = amplitude
@@ -1309,6 +1330,11 @@ bool View::isDetached()
 
 void View::onFocusGained()
 {
+#if defined(PLATFORM_XBOX360)
+    // 焦点回调实名（第 3 轮）：冻结时 [stall-task] 显示卡在哪个视图的
+    // onFocusGained 链里（含 focusEvent 订阅方和父链 onChildFocusGained）。
+    xbox360perf::stageMarkIfMain(("focus:gained " + this->describe()).c_str());
+#endif
     this->focused = true;
 
     Style style = Application::getStyle();
@@ -1335,6 +1361,9 @@ GenericEvent* View::getFocusLostEvent()
 
 void View::onFocusLost()
 {
+#if defined(PLATFORM_XBOX360)
+    xbox360perf::stageMarkIfMain(("focus:lost " + this->describe()).c_str());
+#endif
     this->focused = false;
 
     Style style = Application::getStyle();
@@ -1374,7 +1403,7 @@ void View::show(std::function<void(void)> cb, bool animate, float animationDurat
     if (!this->hidden)
     {
         this->onShowAnimationEnd();
-        cb();
+        if (cb) cb();
         return;
     }
 
@@ -1393,7 +1422,7 @@ void View::show(std::function<void(void)> cb, bool animate, float animationDurat
         this->alpha.setEndCallback([this, cb](bool finished) {
             this->fadeIn = false;
             this->onShowAnimationEnd();
-            cb();
+            if (cb) cb();
         });
 
         this->alpha.start();
@@ -1403,7 +1432,7 @@ void View::show(std::function<void(void)> cb, bool animate, float animationDurat
         this->alpha  = 1.0f;
         this->fadeIn = false;
         this->onShowAnimationEnd();
-        cb();
+        if (cb) cb();
     }
 }
 
@@ -1416,7 +1445,7 @@ void View::hide(std::function<void(void)> cb, bool animated, float animationDura
 {
     if (this->hidden)
     {
-        cb();
+        if (cb) cb();
         return;
     }
 
@@ -1432,7 +1461,7 @@ void View::hide(std::function<void(void)> cb, bool animated, float animationDura
         this->alpha.addStep(0.0f, animationDuration, EasingFunction::quadraticOut);
 
         this->alpha.setEndCallback([cb](bool finished) {
-            if (finished) cb();
+            if (finished && cb) cb();
         });
 
         this->alpha.start();
@@ -1440,7 +1469,7 @@ void View::hide(std::function<void(void)> cb, bool animated, float animationDura
     else
     {
         this->alpha = 0.0f;
-        cb();
+        if (cb) cb();
     }
 }
 
@@ -1528,6 +1557,13 @@ std::string View::getCustomNavigationRouteId(FocusDirection direction)
 
 View::~View()
 {
+#if defined(PLATFORM_XBOX360)
+    // 第 4 轮：实测 Hint 析构 1.45s/个（loop:delete 已给总时长），这里把
+    // ~View 内部拆四段：前置清理 / 焦点+手势释放 / 动画停止 / yoga 释放。
+    // 派生类析构体（~Label 的滚动停止等）在本函数之前执行——若外层总时长
+    // 明显大于四段之和，慢点就在派生析构体里。
+    const auto dvT0 = xbox360perf::nowUsec();
+#endif
     this->resetClickAnimation();
 
     // Parent userdata
@@ -1544,6 +1580,9 @@ View::~View()
             Application::removeWatchedKeys(BrlsKeyCombination{ action->getButton() });
         }
     }
+#if defined(PLATFORM_XBOX360)
+    const auto dvT1 = xbox360perf::nowUsec();
+#endif
 
     // Focus sanity check
     if (Application::getCurrentFocus() == this)
@@ -1552,16 +1591,29 @@ View::~View()
     Application::tryDeinitFirstResponder(this);
     for (GestureRecognizer* recognizer : this->gestureRecognizers)
         delete recognizer;
+#if defined(PLATFORM_XBOX360)
+    const auto dvT2 = xbox360perf::nowUsec();
+#endif
 
     alpha.stop();
     clickAlpha.stop();
     highlightAlpha.stop();
     collapseState.stop();
+#if defined(PLATFORM_XBOX360)
+    const auto dvT3 = xbox360perf::nowUsec();
+#endif
 
     YGNodeFree(this->ygNode);
 
     if (deletionToken)
         *deletionToken = true;
+#if defined(PLATFORM_XBOX360)
+    const double dvTotal = xbox360perf::msSince(dvT0);
+    if (dvTotal > 100)
+        X360_PROBE_INFO("[x360-perf] ~View {:.0f} ms | pre {:.0f} focus+gest {:.0f} anim-stop {:.0f} yoga {:.0f}",
+                     dvTotal, (dvT1 - dvT0) / 1000.0, (dvT2 - dvT1) / 1000.0,
+                     (dvT3 - dvT2) / 1000.0, (xbox360perf::nowUsec() - dvT3) / 1000.0);
+#endif
 }
 
 std::string View::getStringXMLAttributeValue(std::string value)
@@ -1970,6 +2022,11 @@ unsigned View::getMaximumAllowedXMLElements()
 
 void View::registerCommonAttributes()
 {
+#if defined(PLATFORM_XBOX360)
+    // P0 §5.11：实测崩溃点在本函数更深处（registerStringXMLAttribute 的 map 插入），
+    // 在这里采样栈深，用来判断离栈上限还有多少余量。
+    brls::xbox360perf::noteStack(__builtin_frame_address(0));
+#endif
     // Width
     this->registerAutoXMLAttribute("width", [this] {
         this->setWidth(View::AUTO);

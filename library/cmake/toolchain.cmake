@@ -132,17 +132,38 @@ elseif (PLATFORM_XBOX360)
     if (NOT EXISTS "${XBOX360_STRIP_DEPLIBS}")
         message(FATAL_ERROR "Xbox .deplibs cleanup script not found: ${XBOX360_STRIP_DEPLIBS}")
     endif ()
-    set(XBOX360_XDK_LIBS "xapilib,libcMT" CACHE STRING "XDK libraries passed to oxdklink")
+    # Experimental XAV (hardware decode) path.  OFF by default: the XAV entry
+    # points in xav.lib are MSVC-mangled C++ symbols and the COFF member that
+    # defines them cannot be translated by the OXDK toolchain, so the link
+    # fails.  See docs/XBOX360_OPTIMIZATION.md (O10).
+    option(XBOX360_XAV "Link the experimental Xbox 360 XAV hardware-decode path" OFF)
+    set(_xbox360_xdk_libs "xapilib,d3d9,d3dx9,xgraphics,xaudio2,xmcore,oldnames,libcMT,xnet")
+    if (XBOX360_XAV)
+        set(_xbox360_xdk_libs "${_xbox360_xdk_libs},xav")
+    endif ()
+    # FORCE: the cache keeps the old value otherwise.
+    set(XBOX360_XDK_LIBS "${_xbox360_xdk_libs}"
+        CACHE STRING "XDK libraries passed to oxdklink" FORCE)
     set(CMAKE_CXX_LINK_EXECUTABLE
         "python3 ${XBOX360_OXDKLINK_WRAPPER} --objcopy ${XBOX360_LLVM}/bin/llvm-objcopy --oxdklink ${XBOX360_OXDKLINK} --stage ${CMAKE_BINARY_DIR}/.oxdklink/inputs -o <TARGET> -T $ENV{OXDK_DIR}/xbox360/oxdk360/title.ld --xdk $ENV{XDK_DIR} --libs ${XBOX360_XDK_LIBS} <OBJECTS> -- <LINK_LIBRARIES>"
         CACHE STRING "Xbox 360 CXX link rule" FORCE)
     set(CMAKE_C_LINK_EXECUTABLE "${CMAKE_CXX_LINK_EXECUTABLE}" CACHE STRING "Xbox 360 C link rule" FORCE)
     set(CMAKE_EXECUTABLE_SUFFIX ".xex")
-    add_compile_options(
+    # Xenon flags shared by real compiles and CMake's compiler/ABI checks:
+    # try_compile only inherits CMAKE_<LANG>_FLAGS, never add_compile_options.
+    # Without these the XDK CRT headers pulled in by -include stdint.h fail the
+    # check with "Only Win32 target supported"/__declspec errors, while real
+    # compiles (which get them via add_compile_options) work fine.
+    set(XBOX360_COMMON_FLAGS
+        --target=powerpc-unknown-none-elf
         -m32
         -ffreestanding -fno-builtin
         -fms-extensions -fms-compatibility -fshort-wchar -fno-autolink
         -D_WIN32 -D_M_PPCBE -D_M_PPC -D_PPC_ -D_XBOX -D_XENON -DXBOX
+        # Recent upstream clang builds keep the host Linux predefined macros
+        # for freestanding powerpc targets.  They make libc++ include Debian's
+        # glibc headers instead of the XDK shims.
+        -U__linux__ -U__unix__ -U__unix
         # The XDK CRT redeclares size_t and only exposes the Microsoft
         # snprintf spellings. Keep these definitions consistent with the
         # Xbox mbedTLS target and the rest of the Xenon build.
@@ -150,6 +171,10 @@ elseif (PLATFORM_XBOX360)
         -Dsnprintf=_snprintf
         -Dvsnprintf=_vsnprintf
     )
+    add_compile_options(${XBOX360_COMMON_FLAGS})
+    string(REPLACE ";" " " XBOX360_COMMON_FLAGS_STR "${XBOX360_COMMON_FLAGS}")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${XBOX360_COMMON_FLAGS_STR}")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${XBOX360_COMMON_FLAGS_STR}")
     # Match OXDK's OXDK360_LIBCXX=1 mode. The XDK contains an old MSVC/TR1
     # library which is not link-compatible with clang's Itanium ABI. C++
     # sources must see the matching libc++ headers before the XDK include tree.
@@ -184,7 +209,7 @@ elseif (PLATFORM_XBOX360)
         # path. Without this, freestanding C sources fall through to the
         # host's /usr/include headers (for example NanoVG's <stdlib.h>).
         set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -isystem${XBOX360_BOREALIS_CSHIM} -isystem${XBOX360_LIBCXX_CSHIM} -isystem$ENV{OXDK_DIR}/xbox360/oxdk360/header-shim -isystem$ENV{XDK_DIR}/include/xbox -isystem$ENV{XDK_DIR}/TechPreview/Jul12Compiler/include/xbox -D_MSC_VER=1900 -D_MSC_FULL_VER=190023026 -D_W64= -fms-compatibility-version=19 -fdelayed-template-parsing -Xclang -target-feature -Xclang +xenon-abi")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -nostdinc++ -isystem${XBOX360_LIBCXX_CONFIG} -isystem${XBOX360_LIBCXX_COMMON} -isystem${XBOX360_BOREALIS_CSHIM} -isystem${XBOX360_LIBCXX_DIR} -isystem${XBOX360_LIBCXX_CSHIM} -isystem${XBOX360_CLANG_RESOURCE}/include -DNOMINMAX -D_MSC_VER=1900 -D_MSC_FULL_VER=190023026 -D_W64= -D_PTRDIFF_T_DEFINED -D_INTPTR_T_DEFINED -D_UINTPTR_T_DEFINED -include stdint.h -D_XM_NO_INTRINSICS_ -fno-exceptions -fms-compatibility-version=19 -fdelayed-template-parsing -Xclang -target-feature -Xclang +xenon-abi")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -nostdinc++ -isystem${XBOX360_LIBCXX_CONFIG} -isystem${XBOX360_LIBCXX_COMMON} -isystem${XBOX360_BOREALIS_CSHIM} -isystem${XBOX360_LIBCXX_DIR} -isystem${XBOX360_LIBCXX_CSHIM} -isystem${XBOX360_CLANG_RESOURCE}/include -DNOMINMAX -D_MSC_VER=1900 -D_MSC_FULL_VER=190023026 -D_W64= -D_PTRDIFF_T_DEFINED -D_INTPTR_T_DEFINED -D_UINTPTR_T_DEFINED -D_LIBCPP_ABI_FORCE_ITANIUM=1 -D_LIBCPP_ABI_FORCE_MICROSOFT=0 -include stdint.h -D_XM_NO_INTRINSICS_ -fno-exceptions -fms-compatibility-version=19 -fdelayed-template-parsing -Xclang -target-feature -Xclang +xenon-abi")
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -isystem$ENV{OXDK_DIR}/xbox360/oxdk360/header-shim -isystem$ENV{OXDK_DIR}/xbox360/oxdk360/include -isystem$ENV{XDK_DIR}/include/xbox -isystem$ENV{XDK_DIR}/TechPreview/Jul12Compiler/include/xbox")
         message(STATUS "Xbox 360 libc++ headers: ${XBOX360_LIBCXX_DIR}")
 
@@ -205,6 +230,21 @@ elseif (PLATFORM_XBOX360)
             "${XBOX360_BUILTINS_C}"
             "${XBOX360_LIBCXX_RUNTIME_CPP}")
         target_compile_options(xbox360_runtime PRIVATE -O2)
+        # 运行时诊断探针总开关（见 xbox360_perf.cpp）。默认关闭：release 热路径
+        # 不该为纯诊断付费（每次 new/delete 的计时包装、每 10s 的堆可用量试探）。
+        # 需要 [heap-slow] / 堆健康回归时用 -DXBOX360_RUNTIME_PROBES=ON 打开。
+        option(XBOX360_RUNTIME_PROBES "Enable Xbox 360 runtime diagnostic probes" OFF)
+        if (XBOX360_RUNTIME_PROBES)
+            target_compile_options(xbox360_runtime PRIVATE
+                # [heap-slow] 第 5 轮堆锁争用假说：builtins.c 的 operator new/delete
+                # 直连 malloc/free，只在本 target 内把这两个名字改名到 wiliwili 侧
+                # 的计时包装（xbox360_perf.cpp 里 extern "C" 定义，内部再调真正的
+                # CRT malloc/free），给全局分配/释放加 5ms 阈值探针，CRT 本身不动。
+                # libcxx_runtime.cpp 不直接调 malloc/free（其 sized delete 转发到
+                # _ZdlPv → 同一链路），改名对其无影响。
+                -Dmalloc=x360_heap_probe_malloc
+                -Dfree=x360_heap_probe_free)
+        endif ()
         # No project flags/includes: only the Xenon/XDK/libc++ path set up
         # above is visible to these sources.
         set_target_properties(xbox360_runtime PROPERTIES

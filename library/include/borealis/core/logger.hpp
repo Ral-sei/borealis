@@ -35,6 +35,7 @@
 
 #include <borealis/core/event.hpp>
 #include <borealis/core/xbox360_mutex.hpp>
+#include <borealis/platforms/xbox360/xbox360_perf.hpp>
 #include <string>
 
 namespace brls
@@ -91,6 +92,12 @@ class Logger
         if (Logger::logLevel < level)
             return;
 
+        // B 类停摆判别器（仅 Xbox 主线程生效，非 Xbox 是空内联）：冻结时
+        // 阶段名停在 log:fmt/wait/out/fire = 卡在日志本身（format / 等
+        // logMtx / fmt::print 输出 / 订阅方）；停在调用方阶段 = 卡在调用方
+        // 代码里（比如视图析构或焦点回调）。这是"真冻结 vs 日志通道背压"
+        // 的最终判别点。
+        xbox360perf::stageMarkIfMain("log:fmt");
         TimePoint now = std::chrono::system_clock::now();
         uint64_t ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             now.time_since_epoch()).count() % 1000;
@@ -104,10 +111,12 @@ class Logger
 #endif
         std::string log = fmt::format(format, std::forward<Args>(args)...);
 
+        xbox360perf::stageMarkIfMain("log:wait");
         PlatformUniqueLock lock;
         if (Logger::threadSafeLogging)
             lock = PlatformUniqueLock { logMtx };
 
+        xbox360perf::stageMarkIfMain("log:out");
 #if defined(__cpp_exceptions)
         try
         {
@@ -124,6 +133,7 @@ class Logger
             fmt::print(logOut, "{:%H:%M:%S}.{:03d}\033{}[{}]\033[0m {}\n", time_tm, (int)ms, color, prefix, log);
 #endif
 
+            xbox360perf::stageMarkIfMain("log:fire");
             logEvent.fire(now, level, log);
 #if defined(__cpp_exceptions)
         }

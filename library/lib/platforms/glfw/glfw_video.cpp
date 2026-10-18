@@ -278,10 +278,10 @@ GLFWVideoContext::GLFWVideoContext(const std::string& windowTitle, uint32_t wind
     {
     }
 #else
-    const char* icon_path = BRLS_ASSET("icon/icon.png");
-    if (access(icon_path, F_OK) != -1)
+    const std::string icon_path = BRLS_ASSET("icon/icon.png");
+    if (access(icon_path.c_str(), F_OK) != -1)
     {
-        images[0].pixels = stbi_load(icon_path, &images[0].width, &images[0].height, 0, 4);
+        images[0].pixels = stbi_load(icon_path.c_str(), &images[0].width, &images[0].height, 0, 4);
         glfwSetWindowIcon(this->window, 1, images);
     }
 #endif

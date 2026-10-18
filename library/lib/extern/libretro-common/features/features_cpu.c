@@ -44,7 +44,7 @@
 #endif
 
 #if defined(_XBOX360)
-#include <PPCIntrinsics.h>
+#include <xtl.h>
 #elif !defined(__MACH__) && (defined(__POWERPC__) || defined(__powerpc__) || defined(__ppc__) || defined(__PPC64__) || defined(__powerpc64__))
 #ifndef _PPU_INTRINSICS_H
 #include <ppu_intrinsics.h>
@@ -213,7 +213,9 @@ retro_perf_tick_t cpu_features_get_perf_counter(void)
 
 retro_time_t cpu_features_get_time_usec(void)
 {
-#if defined(_WIN32)
+#if defined(_XBOX360)
+   return (retro_time_t)GetTickCount() * 1000ULL;
+#elif defined(_WIN32)
    static LARGE_INTEGER freq;
    LARGE_INTEGER count;
 
@@ -256,7 +258,7 @@ retro_time_t cpu_features_get_time_usec(void)
 #endif
 }
 
-#if defined(__x86_64__) || defined(__i386__) || defined(__i486__) || defined(__i686__) || (defined(_M_X64) && _MSC_VER > 1310) || (defined(_M_IX86) && _MSC_VER > 1310)
+#if !defined(_XBOX360) && (defined(__x86_64__) || defined(__i386__) || defined(__i486__) || defined(__i686__) || (defined(_M_X64) && _MSC_VER > 1310) || (defined(_M_IX86) && _MSC_VER > 1310))
 #define CPU_X86
 #endif
 

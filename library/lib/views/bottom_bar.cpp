@@ -105,6 +105,7 @@ void BottomBar::draw(NVGcontext* vg, float x, float y, float width, float height
 
 void BottomBar::updateText()
 {
+    static size_t displayedFPS = 0;
 #ifdef PS4
     OrbisDateTime lt{};
     if (sceRtcGetCurrentClockLocalTime)
@@ -120,12 +121,15 @@ void BottomBar::updateText()
 #endif
     std::stringstream ss;
     ss << std::put_time(&tm, "%H:%M:%S");
-    if (ss.str() != bottomText)
+    const std::string currentTime = ss.str();
+    const size_t currentFPS = Application::getFPS();
+    if (currentTime != bottomText || (Application::getFPSStatus() && currentFPS != displayedFPS))
     {
-        bottomText = ss.str();
+        bottomText = currentTime;
+        displayedFPS = currentFPS;
         if (Application::getFPSStatus())
         {
-            time->setText(bottomText + " | FPS:" + std::to_string(Application::getFPS()));
+            time->setText(bottomText + " | FPS:" + std::to_string(currentFPS));
         }
         else
         {

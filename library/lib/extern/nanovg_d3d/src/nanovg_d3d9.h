@@ -118,9 +118,15 @@ struct D3D9NVGpath {
 };
 
 struct D3D9NVGvertexbuffer {
+	#if defined(_XBOX) || defined(_XENON)
+	IDirect3DVertexBuffer9* pBuffers[8];
+	unsigned int bufferSizes[8];
+	unsigned int currentBuffer;
+	#else
 	unsigned int MaxBufferEntries;
 	unsigned int CurrentBufferEntry;
 	IDirect3DVertexBuffer9* pBuffer;
+	#endif
 };
 
 struct D3D9NVGfragUniforms {
@@ -274,6 +280,47 @@ static void D3D9nvg__deleteShader(struct D3D9NVGshader* shader)
 		IDirect3DPixelShader9_Release(shader->frag);
 }
 
+#if defined(_XBOX) || defined(_XENON)
+static IDirect3DVertexBuffer9* D3D9nvg_updateVertexBuffer(struct D3D9NVGcontext* D3D)
+{
+	struct D3D9NVGvertexbuffer* vb = &D3D->VertexBuffer;
+	const unsigned int index = vb->currentBuffer;
+	const unsigned int size = (unsigned int)D3D->nverts * sizeof(NVGvertex);
+	IDirect3DVertexBuffer9* buffer = vb->pBuffers[index];
+	unsigned int lockSize;
+	HRESULT hr;
+	void* data = NULL;
+
+	// Xenon has no D3DLOCK_DISCARD. Rotate buffers so the GPU can finish reading
+	// earlier submissions before the CPU reuses their storage.
+	vb->currentBuffer = (index + 1) % 8;
+	if (vb->bufferSizes[index] < size)
+	{
+		IDirect3DVertexBuffer9* replacement = NULL;
+		hr = IDirect3DDevice9_CreateVertexBuffer(D3D->pDevice, size,
+			NANOVG_D3D9_USAGE_DYNAMIC | NANOVG_D3D9_USAGE_WRITEONLY, 0,
+			D3DPOOL_DEFAULT, &replacement, NULL);
+		if (FAILED(hr))
+			return NULL;
+
+		if (buffer)
+			IDirect3DVertexBuffer9_Release(buffer);
+		vb->pBuffers[index] = buffer = replacement;
+		vb->bufferSizes[index] = size;
+	}
+
+	lockSize = vb->bufferSizes[index];
+	hr = IDirect3DVertexBuffer9_Lock(buffer, 0, lockSize, &data, 0);
+	if (FAILED(hr) || !data)
+		return NULL;
+	memcpy(data, D3D->verts, size);
+	hr = IDirect3DVertexBuffer9_Unlock(buffer);
+	if (FAILED(hr))
+		return NULL;
+
+	return buffer;
+}
+#else
 static unsigned int D3D9nvg_updateVertexBuffer(struct D3D9NVGcontext* D3D)
 {
 	void* data;
@@ -314,6 +361,7 @@ static unsigned int D3D9nvg_updateVertexBuffer(struct D3D9NVGcontext* D3D)
 
 	return offset;
 }
+#endif
 
 static int D3D9nvg__renderCreate(void* uptr)
 {
@@ -336,24 +384,34 @@ static int D3D9nvg__renderCreate(void* uptr)
 			return 0;
 	}
 
+#if defined(_XBOX) || defined(_XENON)
+	D3D->VertexBuffer.currentBuffer = 0;
+#else
 	D3D->VertexBuffer.MaxBufferEntries = 20000;
 	D3D->VertexBuffer.CurrentBufferEntry = 0;
 
 	// Create the vertex buffer.
 	hr = IDirect3DDevice9_CreateVertexBuffer(D3D->pDevice, sizeof(NVGvertex) * D3D->VertexBuffer.MaxBufferEntries, NANOVG_D3D9_USAGE_DYNAMIC | NANOVG_D3D9_USAGE_WRITEONLY, 0, D3DPOOL_DEFAULT, &D3D->VertexBuffer.pBuffer, NULL);
-	
 	if (FAILED(hr))
 	{
 		D3D9nvg__deleteShader(&D3D->shader);
 		return 0;
 	}
+#endif
 
 	hr = IDirect3DDevice9_CreateVertexDeclaration(D3D->pDevice, LayoutRenderTriangles, &D3D->pLayoutRenderTriangles);
 	
 	if (FAILED(hr))
 	{
 		D3D9nvg__deleteShader(&D3D->shader);
+#if defined(_XBOX) || defined(_XENON)
+		int i;
+		for (i = 0; i < 8; i++)
+			if (D3D->VertexBuffer.pBuffers[i])
+				IDirect3DVertexBuffer9_Release(D3D->VertexBuffer.pBuffers[i]);
+#else
 		IDirect3DVertexBuffer9_Release(D3D->VertexBuffer.pBuffer);
+#endif
 		return 0;
 	}
 
@@ -362,16 +420,63 @@ static int D3D9nvg__renderCreate(void* uptr)
 	return 1;
 }
 
+#if defined(PLATFORM_XBOX360) || defined(__XBOX360__)
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern void DbgPrint(const char* fmt, ...);
+#ifdef __cplusplus
+}
+#endif
+#include <stdlib.h>
+#include <xbox.h> /* XMemCpyStreaming_WriteCombined (xapilib.lib) */
+/* P0 #9 探针：把一次建纹理拆成 CreateTexture(分配 51.8MB) 与 逐行填充+字节交换
+   两段计时，看 12.4s 到底花在哪一段。 */
+static double D3D9nvg__nowMs(void)
+{
+	static LARGE_INTEGER freq = {0};
+	LARGE_INTEGER now;
+	if (freq.QuadPart == 0)
+	{
+		QueryPerformanceFrequency(&freq);
+		if (freq.QuadPart == 0) freq.QuadPart = 1;
+	}
+	QueryPerformanceCounter(&now);
+	return (double)now.QuadPart * 1000.0 / (double)freq.QuadPart;
+}
+#endif
+
+/* Copy pixel data into a LockRect'ed texture row/block.
+   On Xbox 360 the pointer returned by LockRect targets write-combined memory.
+   A plain memcpy of a row whose length is not a multiple of four, or of a row
+   that is not gap-free, makes the Xenon WC store buffers flush partially
+   ("Bad Write-Combined Writes"), and reading the destination back (the RGBA
+   byte swap used to do that in place) is an "Uncached/Write-Combined Read"
+   that the XDK requires to be repaired.  XMemCpyStreaming_WriteCombined is the
+   XDK's cached -> write-combined streaming copy: it drives the dcbt/dcbf/
+   dcbz128 sequence itself and keeps its L2 footprint at 128 KB
+   (Kernel_Write_Combined / XMemCpyStreaming_WriteCombined). */
+static void D3D9nvg__copyToTexture(unsigned char* dest, const unsigned char* src, size_t count)
+{
+	if (count == 0)
+		return;
+#if defined(PLATFORM_XBOX360) || defined(__XBOX360__)
+	XMemCpyStreaming_WriteCombined(dest, src, count);
+#else
+	memcpy(dest, src, count);
+#endif
+}
+
 static int D3D9nvg__renderCreateTexture(void* uptr, int type, int w, int h, int imageFlags, const unsigned char* data)
 {
 	struct D3D9NVGcontext* D3D = (struct D3D9NVGcontext*)uptr;
 	struct D3D9NVGtexture* tex = D3D9nvg__allocTexture(D3D);
 	D3DLOCKED_RECT locked;
 	HRESULT hr;
-	INT levels = 1, usage = NANOVG_D3D9_USAGE_DYNAMIC, size, pixelWidthBytes;
+	INT levels = 1, usage = NANOVG_D3D9_USAGE_DYNAMIC, pixelWidthBytes;
 	D3DFORMAT format;
-	int i, y;
-	unsigned char *texData, *tmpData;
+	int y;
+	unsigned char *texData;
 	
 	if (tex == NULL)
 	{
@@ -392,23 +497,36 @@ static int D3D9nvg__renderCreateTexture(void* uptr, int type, int w, int h, int 
 
 	if (type == NVG_TEXTURE_RGBA)
 	{
+		#if defined(PLATFORM_XBOX360) || defined(__XBOX360__)
+		// Xbox 360 32-bit texture formats use 8-in-32 endian swapping.
+		format = D3DFMT_LIN_A8B8G8R8;
+		#else
 		format = D3DFMT_A8R8G8B8;
+		#endif
 		pixelWidthBytes = 4;
 	}
 	else
 	{
+		#if defined(PLATFORM_XBOX360) || defined(__XBOX360__)
+		format = D3DFMT_LIN_L8;
+		#else
 		format = D3DFMT_L8;
+		#endif
 		pixelWidthBytes = 1;
 	}
 
-	size = w * h * pixelWidthBytes;
-
+#if defined(PLATFORM_XBOX360) || defined(__XBOX360__)
+	const double tCreate0 = D3D9nvg__nowMs();
+#endif
 	hr = IDirect3DDevice9_CreateTexture(D3D->pDevice, w, h, levels, usage, format, D3DPOOL_DEFAULT, &tex->tex, NULL);
 
 	if (FAILED(hr))
 	{
 		return 0;
 	}
+#if defined(PLATFORM_XBOX360) || defined(__XBOX360__)
+	const double tFill0 = D3D9nvg__nowMs();
+#endif
 
 	if (data != NULL)
 	{
@@ -418,28 +536,80 @@ static int D3D9nvg__renderCreateTexture(void* uptr, int type, int w, int h, int 
 		{
 			texData = (unsigned char*)locked.pBits;
 
-			// Have to copy by row since pitch can be different
-			for (y = 0; y < h; y++) {
-				memcpy(texData + y * locked.Pitch, data + y * w * pixelWidthBytes, w * pixelWidthBytes);
-			}
-
+			/* 4800x2700 快照图：原先先 memcpy 进纹理、再在纹理显存上逐像素做 8IN32
+			   字节交换，等于对 write-combined 内存做 1296 万次随机字节读写
+			   （2 读 + 4 写/像素）→ 实测 12429ms（≈957ns/像素），主线程整段冻结。
+			   现在改为：字节交换在一块普通缓存内存里完成，再整行顺序写入纹理。 */
+			unsigned char* scratch = NULL;
 			if (type == NVG_TEXTURE_RGBA)
 			{
-				for (y = 0; y < h; y++)
+				scratch = (unsigned char*)malloc((size_t)w * 4);
+			}
+
+			// Have to copy by row since pitch can be different
+			for (y = 0; y < h; y++) {
+				unsigned char* destination = texData + y * locked.Pitch;
+				const unsigned char* source = data + y * w * pixelWidthBytes;
+				if (type == NVG_TEXTURE_RGBA)
 				{
-					for (i = 0; i < w; i++)
+					// NanoVG supplies little-endian RGBA bytes (r,g,b,a).
+					// The big-endian GPU reads LIN_A8B8G8R8 as a 32-bit word,
+					// so each pixel needs the documented GPUENDIAN_8IN32 swap
+					// (full byte reversal "abcdefgh" -> "dcbahgfe"), leaving
+					// (a,b,g,r) in memory. 结果与原实现逐字节一致。
+					int i;
+					if (scratch != NULL)
 					{
-						tmpData = texData + y * locked.Pitch + i * pixelWidthBytes;
-						unsigned char swp = tmpData[0];
-						tmpData[0] = tmpData[2];
-						tmpData[2] = swp;
+						for (i = 0; i < w * 4; i += 4)
+						{
+							unsigned char b0 = source[i];
+							unsigned char b1 = source[i + 1];
+							scratch[i]     = source[i + 3];
+							scratch[i + 1] = source[i + 2];
+							scratch[i + 2] = b1;
+							scratch[i + 3] = b0;
+						}
+						D3D9nvg__copyToTexture(destination, scratch, (size_t)w * 4);
+					}
+					else
+					{
+						/* 分配失败时退回原实现（在纹理上原地交换，慢但正确） */
+						D3D9nvg__copyToTexture(destination, source, (size_t)w * pixelWidthBytes);
+						for (i = 0; i < w * 4; i += 4)
+						{
+							unsigned char b0 = destination[i];
+							unsigned char b1 = destination[i + 1];
+							destination[i] = destination[i + 3];
+							destination[i + 1] = destination[i + 2];
+							destination[i + 2] = b1;
+							destination[i + 3] = b0;
+						}
 					}
 				}
+				else
+				{
+					D3D9nvg__copyToTexture(destination, source, (size_t)w * pixelWidthBytes);
+				}
+			}
+			if (scratch != NULL)
+			{
+				free(scratch);
 			}
 
 			IDirect3DTexture9_UnlockRect(tex->tex, 0);
 		}
 	}
+#if defined(PLATFORM_XBOX360) || defined(__XBOX360__)
+	{
+		const double tEnd = D3D9nvg__nowMs();
+		/* 大纹理（≥400 万像素，即 4800x2700 快照）必打，用于正面确认修复生效 */
+#if X360_RUNTIME_PROBES
+		if ((long long)w * h >= 4000000 || tEnd - tCreate0 >= 100.0)
+			DbgPrint("[tex] %dx%d type=%d create=%.0fms fill=%.0fms total=%.0fms",
+			         w, h, type, tFill0 - tCreate0, tEnd - tFill0, tEnd - tCreate0);
+#endif
+	}
+#endif
 
 	return tex->id;
 }
@@ -457,17 +627,14 @@ static int D3D9nvg__renderUpdateTexture(void* uptr, int image, int x, int y, int
 	RECT rect;
 	D3DLOCKED_RECT locked;
 	HRESULT hr;
-	INT pixelWidthBytes, size;
+	INT pixelWidthBytes;
 	unsigned char* texData;
-	int i;
+	int row;
 	
 	if (tex == NULL)
 	{
 		return 0;
 	}
-
-	x = 0;
-	w = tex->width;
 
 	rect.left = x;
 	rect.right = (x + w);
@@ -490,20 +657,62 @@ static int D3D9nvg__renderUpdateTexture(void* uptr, int image, int x, int y, int
 		pixelWidthBytes = 1;
 	}
 
-	size = w * h * pixelWidthBytes;
 	texData = (unsigned char*)locked.pBits;
 
-	memcpy(texData, data + y * tex->width * pixelWidthBytes, size);
-
+	// RGBA updates need the same GPUENDIAN_8IN32 byte swap as texture creation,
+	// but doing it in place on the locked texture means reading back from
+	// write-combined memory (an "Uncached/Write-Combined Read").  Swap into a
+	// cached scratch row first, then copy it out with the streaming write
+	// (mirrors D3D9nvg__renderCreateTexture).
+	unsigned char* scratch = NULL;
 	if (tex->type == NVG_TEXTURE_RGBA)
+		scratch = (unsigned char*)malloc((size_t)w * 4);
+
+	for (row = 0; row < h; row++)
 	{
-		for (i = 0; i < size; i += 4)
+		unsigned char* destination = texData + row * locked.Pitch;
+		const unsigned char* source = data + ((y + row) * tex->width + x) * pixelWidthBytes;
+		if (tex->type == NVG_TEXTURE_RGBA)
 		{
-			unsigned char swp = texData[i];
-			texData[i] = texData[i + 2];
-			texData[i + 2] = swp;
+			int i;
+			if (scratch != NULL)
+			{
+				// Keep partial atlas updates in the same GPUENDIAN_8IN32 byte
+				// order (a,b,g,r) as texture creation.
+				for (i = 0; i < w * 4; i += 4)
+				{
+					unsigned char b0 = source[i];
+					unsigned char b1 = source[i + 1];
+					scratch[i]     = source[i + 3];
+					scratch[i + 1] = source[i + 2];
+					scratch[i + 2] = b1;
+					scratch[i + 3] = b0;
+				}
+				D3D9nvg__copyToTexture(destination, scratch, (size_t)w * 4);
+			}
+			else
+			{
+				/* 分配失败时退回原实现（在纹理上原地交换，慢但正确） */
+				D3D9nvg__copyToTexture(destination, source, (size_t)w * pixelWidthBytes);
+				for (i = 0; i < w * 4; i += 4)
+				{
+					unsigned char b0 = destination[i];
+					unsigned char b1 = destination[i + 1];
+					destination[i] = destination[i + 3];
+					destination[i + 1] = destination[i + 2];
+					destination[i + 2] = b1;
+					destination[i + 3] = b0;
+				}
+			}
 		}
+		else
+		{
+			D3D9nvg__copyToTexture(destination, source, (size_t)w * pixelWidthBytes);
+		}
+
 	}
+	if (scratch != NULL)
+		free(scratch);
 
 	IDirect3DTexture9_UnlockRect(tex->tex, 0);
  
@@ -676,6 +885,12 @@ static void D3D9nvg__fill(struct D3D9NVGcontext* D3D, struct D3D9NVGcall* call)
 	// Draw shapes
 	IDirect3DDevice9_SetRenderState(D3D->pDevice, D3DRS_STENCILENABLE, TRUE);
 	IDirect3DDevice9_SetRenderState(D3D->pDevice, D3DRS_COLORWRITEENABLE, 0);
+	// Two-sided stenciling is required so the hole subpath (opposite winding)
+	// can decrement the cover count and stop the fill from painting the whole
+	// outer rect.  Without this, the CCW_STENCILPASS/DECRSAT states below are
+	// ignored on Xenon and the entire subpath bounds get filled (the dark
+	// overlay seen over every focused widget).
+	IDirect3DDevice9_SetRenderState(D3D->pDevice, D3DRS_TWOSIDEDSTENCILMODE, TRUE);
 	IDirect3DDevice9_SetRenderState(D3D->pDevice, D3DRS_STENCILFUNC, D3DCMP_ALWAYS);
 	IDirect3DDevice9_SetRenderState(D3D->pDevice, D3DRS_STENCILFAIL, D3DSTENCILOP_KEEP);
 	IDirect3DDevice9_SetRenderState(D3D->pDevice, D3DRS_STENCILZFAIL, D3DSTENCILOP_KEEP);
@@ -728,6 +943,7 @@ static void D3D9nvg__fill(struct D3D9NVGcontext* D3D, struct D3D9NVGcall* call)
 	IDirect3DDevice9_DrawPrimitive(D3D->pDevice, D3DPT_TRIANGLELIST, call->triangleOffset, call->triangleCount / 3);
 
 	IDirect3DDevice9_SetRenderState(D3D->pDevice, D3DRS_STENCILENABLE, FALSE);
+	IDirect3DDevice9_SetRenderState(D3D->pDevice, D3DRS_TWOSIDEDSTENCILMODE, FALSE);
 }
 
 static void D3D9nvg__convexFill(struct D3D9NVGcontext* D3D, struct D3D9NVGcall* call)
@@ -841,10 +1057,19 @@ static void D3D9nvg__renderFlush(void* uptr)
 
 	if (D3D->ncalls > 0) 
 	{
-		unsigned int buffer0Offset = D3D9nvg_updateVertexBuffer(D3D);
+		IDirect3DVertexBuffer9* vertexBuffer;
+		unsigned int buffer0Offset = 0;
+		#if defined(_XBOX) || defined(_XENON)
+		vertexBuffer = D3D9nvg_updateVertexBuffer(D3D);
+		if (vertexBuffer == NULL)
+			goto reset_calls;
+		#else
+		buffer0Offset = D3D9nvg_updateVertexBuffer(D3D);
+		vertexBuffer = D3D->VertexBuffer.pBuffer;
+		#endif
 
 		// Upload vertex data
-		IDirect3DDevice9_SetStreamSource(D3D->pDevice, 0, D3D->VertexBuffer.pBuffer, buffer0Offset, sizeof(NVGvertex));
+		IDirect3DDevice9_SetStreamSource(D3D->pDevice, 0, vertexBuffer, buffer0Offset, sizeof(NVGvertex));
 		IDirect3DDevice9_SetVertexDeclaration(D3D->pDevice, D3D->pLayoutRenderTriangles);
 
 		// Ensure valid state
@@ -869,6 +1094,7 @@ static void D3D9nvg__renderFlush(void* uptr)
 		IDirect3DDevice9_SetRenderState(D3D->pDevice, D3DRS_CCW_STENCILZFAIL, D3DSTENCILOP_KEEP);
 		IDirect3DDevice9_SetRenderState(D3D->pDevice, D3DRS_CCW_STENCILPASS, D3DSTENCILOP_KEEP);
 		IDirect3DDevice9_SetRenderState(D3D->pDevice, D3DRS_STENCILREF, 0);
+		IDirect3DDevice9_SetRenderState(D3D->pDevice, D3DRS_TWOSIDEDSTENCILMODE, FALSE);
 
 		IDirect3DDevice9_SetVertexShaderConstantF(D3D->pDevice, 0, D3D->view, 1);
 
@@ -898,6 +1124,7 @@ static void D3D9nvg__renderFlush(void* uptr)
 	}
 
 	// Reset calls
+	reset_calls:
 	D3D->nverts = 0;
 	D3D->npaths = 0;
 	D3D->ncalls = 0;
@@ -1188,7 +1415,13 @@ static void D3D9nvg__renderDelete(void* uptr)
 		}
 	}
 
+#if defined(_XBOX) || defined(_XENON)
+	for (i = 0; i < 8; i++)
+		if (D3D->VertexBuffer.pBuffers[i])
+			IDirect3DVertexBuffer9_Release(D3D->VertexBuffer.pBuffers[i]);
+#else
 	IDirect3DVertexBuffer9_Release(D3D->VertexBuffer.pBuffer);
+#endif
 
 	IDirect3DVertexDeclaration9_Release(D3D->pLayoutRenderTriangles);
 	

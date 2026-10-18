@@ -15,7 +15,7 @@ bool Xbox360Platform::mainLoopIteration() {
 }
 ThemeVariant Xbox360Platform::getThemeVariant() { return theme; }
 void Xbox360Platform::setThemeVariant(ThemeVariant t) { theme = t; }
-std::string Xbox360Platform::getLocale() { return LOCALE_DEFAULT; }
+std::string Xbox360Platform::getLocale() { return APP_LOCALE_DEFAULT; }
 AudioPlayer* Xbox360Platform::getAudioPlayer() { return audio; }
 VideoContext* Xbox360Platform::getVideoContext() { return video; }
 InputManager* Xbox360Platform::getInputManager() { return input; }

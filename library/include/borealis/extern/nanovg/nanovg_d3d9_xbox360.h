@@ -17,6 +17,6 @@
 #include <xbox.h>
 #endif
 
-#include "nanovg_d3d9.h"
+#include <nanovg_d3d9.h>
 
 #endif

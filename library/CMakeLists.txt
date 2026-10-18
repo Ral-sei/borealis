@@ -253,7 +253,10 @@ elseif(PLATFORM_XBOX360)
     # Xbox 360 uses the XDK D3D9/NanoVG backend and direct XInput platform
     # implementation; no desktop window backend is selected here.
     list(APPEND BOREALIS_SOURCE ${BOREALIS_PATH}/lib/platforms/xbox360)
-    list(APPEND BRLS_PLATFORM_OPTION -DPLATFORM_XBOX360 -D__XBOX360__ -D_XBOX360)
+    # The current Xenon runtime does not initialize the TLS base used by
+    # stb_image's thread-local decoder flags. Use its global fallback, as on
+    # Switch, so image loading does not dereference an unset r2 TLS pointer.
+    list(APPEND BRLS_PLATFORM_OPTION -DPLATFORM_XBOX360 -D__XBOX360__ -D_XBOX360 -DSTBI_NO_THREAD_LOCALS)
     set(BRLS_PLATFORM_RESOURCES_PATH "\"game:\\\\resources\\\\\"")
 else ()
     message(FATAL_ERROR "Please set build target. Example: -DPLATFORM_DESKTOP=ON or -DPLATFORM_SWITCH=ON")
@@ -312,6 +315,22 @@ foreach (lib ${BOREALIS_SOURCE})
     list(APPEND BOREALIS_SRC ${TEMP_SRC})
 endforeach (lib)
 
+# Xbox 360 运行时诊断探针开关（与 toolchain.cmake 的 XBOX360_RUNTIME_PROBES 同步）。
+# 只作用于 xbox360_perf.cpp 一个文件，切换时不会触发全量重编译。
+if (PLATFORM_XBOX360)
+    if (XBOX360_RUNTIME_PROBES)
+        set(X360_RUNTIME_PROBES_VALUE 1)
+    else ()
+        set(X360_RUNTIME_PROBES_VALUE 0)
+    endif ()
+    # Experimental XAV hardware-decode path (option in toolchain.cmake, OFF).
+    if (XBOX360_XAV)
+        set(X360_XAV_VALUE 1)
+    else ()
+        set(X360_XAV_VALUE 0)
+    endif ()
+endif ()
+
 # borealis 图形 driver
 set(BOREALIS_DRIVER BOREALIS_USE_OPENGL)
 if (BOREALIS_USE_D3D9)
@@ -334,6 +353,12 @@ message(STATUS "borealis driver ${BOREALIS_DRIVER}")
 
 # borealis Library
 add_library(borealis STATIC ${BOREALIS_SRC})
+if (PLATFORM_XBOX360)
+    # 全 target 注入探针开关，供 xbox360_perf.hpp 的 X360_PROBE_* 宏以及
+    # xbox360_perf.cpp / xbox360_yuv.cpp 使用。
+    target_compile_definitions(borealis PRIVATE X360_RUNTIME_PROBES=${X360_RUNTIME_PROBES_VALUE})
+    target_compile_definitions(borealis PRIVATE X360_XAV=${X360_XAV_VALUE})
+endif ()
 set_target_properties(borealis PROPERTIES
         CXX_STANDARD 17
         UNITY_BUILD ${BRLS_UNITY_BUILD}
@@ -341,6 +366,9 @@ set_target_properties(borealis PROPERTIES
 set_source_files_properties(${BOREALIS_PATH}/lib/platforms/desktop/desktop_darwin.mm PROPERTIES
         SKIP_UNITY_BUILD_INCLUSION ON)
 target_include_directories(borealis PUBLIC ${BOREALIS_INCLUDE})
+if (PLATFORM_XBOX360)
+    target_include_directories(borealis PRIVATE ${BOREALIS_PATH}/lib/extern/nanovg_d3d/src)
+endif ()
 target_link_libraries(borealis fmt tweeny yogacore ${BRLS_PLATFORM_LIBS})
 target_compile_options(borealis PUBLIC
         -DBRLS_RESOURCES=${BRLS_PLATFORM_RESOURCES_PATH}
